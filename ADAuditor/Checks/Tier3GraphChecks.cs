@@ -175,13 +175,34 @@ namespace ADAuditor.Checks
 
             nameOf[domSid] = "DOMAIN(" + ctx.DomainDns + ")";
 
+            // ---- fold in non-ACL vectors (Kerberoast / AS-REP / ADCS-ESC1) ----
+            nameOf["S-1-5-11"] = "Authenticated Users";
+            foreach (var ve in ctx.VectorEdges)
+                edges.Add((ve.From, ve.To, ve.Type));
+
             // ---- target tier-0 set ----
+            // Core admin groups: membership here means a legitimate admin, so members are
+            // excluded as attack sources (tier0Members below uses only this list).
             var targetGroups = new List<string>();
             foreach (var rid in new[] { "-512", "-519", "-518", "-516", "-526", "-527" })
                 if (!string.IsNullOrEmpty(domSid)) targetGroups.Add(domSid + rid);
             targetGroups.Add("S-1-5-32-544");
+
             var targets = new HashSet<string>(targetGroups, StringComparer.OrdinalIgnoreCase);
             if (!string.IsNullOrEmpty(domSid)) { targets.Add(domSid + "-502"); targets.Add(domSid); }
+
+            // High-value targets where MEMBERSHIP or CONTROL is itself DC compromise
+            // (BloodHound-style). These are NOT added to targetGroups, so their members
+            // still count as attack sources (membership here is the finding we want).
+            foreach (var sid in new[] { "S-1-5-32-548", "S-1-5-32-549", "S-1-5-32-550", "S-1-5-32-551" })
+                targets.Add(sid); // Account / Server / Print / Backup Operators
+            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
+                "(&(objectClass=group)(sAMAccountName=DnsAdmins))", "objectSid")))
+            { var b = CheckUtil.Bytes(r, "objectSid"); if (b != null) targets.Add(new SecurityIdentifier(b, 0).Value); }
+            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
+                "(&(objectCategory=computer)" + LdapBit.HasFlag("userAccountControl", 8192) + ")", "objectSid")))
+            { var b = CheckUtil.Bytes(r, "objectSid"); if (b != null) targets.Add(new SecurityIdentifier(b, 0).Value); }
+
             foreach (var t in targets) if (!nameOf.ContainsKey(t)) nameOf[t] = CheckUtil.TranslateSid(t);
 
             // ---- legitimate tier-0 members (excluded from "attack" sources) ----
@@ -264,12 +285,9 @@ namespace ADAuditor.Checks
                 if (dist.ContainsKey(b) && !targets.Contains(b))
                     CheckUtil.AddDetail(everyone, BuildPath(b, targets, nextHop, nextType, nameOf));
 
-            // ---- build the visual subgraph from the reported paths ----
-            var starts = new List<string>();
-            for (int i = 0; i < sources.Count && i < MaxPaths; i++) starts.Add(sources[i]);
-            foreach (var b in broad)
-                if (dist.ContainsKey(b) && !targets.Contains(b)) starts.Add(b);
-            var graph = BuildGraph(starts, targets, broad, nextHop, nextType, dist, nameOf);
+            // ---- build the full escalation subgraph (every shortest-path edge to tier-0) ----
+            var sourceSet = new HashSet<string>(sources, StringComparer.OrdinalIgnoreCase);
+            var graph = BuildGraph(edges, sourceSet, targets, broad, dist, nameOf);
             if (graph.Nodes.Count > 0) ctx.AttackGraph = graph;
 
             if (everyone.Details.Count > 0) yield return everyone;
@@ -297,44 +315,93 @@ namespace ADAuditor.Checks
             return sb.ToString();
         }
 
-        private static GraphModel BuildGraph(List<string> starts, HashSet<string> targets, HashSet<string> broad,
-            Dictionary<string, string> nextHop, Dictionary<string, string> nextType,
+        private const int MaxGraphEdges = 800;
+
+        // Escalation subgraph = union of all shortest paths that START at a real entry
+        // point (non-privileged source or broad principal). Forward-traversing from the
+        // sources keeps legitimate admins (e.g. built-in Administrator) out of the graph,
+        // while still drawing intermediate nodes that an attacker passes through.
+        private static GraphModel BuildGraph(
+            List<(string from, string to, string type)> edges,
+            HashSet<string> sources, HashSet<string> targets, HashSet<string> broad,
             Dictionary<string, int> dist, Dictionary<string, string> nameOf)
         {
-            var g = new GraphModel();
-            var nodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var edgeMap = new Dictionary<string, GraphEdge>(StringComparer.OrdinalIgnoreCase);
-            var startSet = new HashSet<string>(starts, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var start in starts)
+            // forward adjacency: any edge whose target can still reach tier-0
+            var adj = new Dictionary<string, List<(string to, string type)>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in edges)
             {
-                if (!dist.ContainsKey(start)) continue;
-                string node = start;
-                int hops = 0;
-                bool markedWeak = false;
-                AddNode(g, nodeIds, node, targets, broad, startSet, dist, nameOf);
-                while (!targets.Contains(node) && nextHop.ContainsKey(node) && hops++ < MaxHops)
+                if (!dist.ContainsKey(e.to)) continue; // 'to' must be able to reach tier-0
+                if (!adj.TryGetValue(e.from, out var l)) { l = new List<(string, string)>(); adj[e.from] = l; }
+                l.Add((e.to, e.type));
+            }
+
+            var starts = new HashSet<string>(sources, StringComparer.OrdinalIgnoreCase);
+            foreach (var b in broad)
+                if (dist.ContainsKey(b) && !targets.Contains(b)) starts.Add(b);
+
+            var g = new GraphModel();
+            var pair = new Dictionary<string, GraphEdge>(StringComparer.OrdinalIgnoreCase);
+            var visited = new HashSet<string>(starts, StringComparer.OrdinalIgnoreCase);
+            var q = new Queue<string>(starts);
+            while (q.Count > 0)
+            {
+                var cur = q.Dequeue();
+                if (targets.Contains(cur)) continue;        // do not expand out of tier-0 targets
+                if (!adj.TryGetValue(cur, out var outs)) continue;
+                foreach (var (to, type) in outs)
                 {
-                    string nxt = nextHop[node];
-                    string type = nextType[node];
-                    AddNode(g, nodeIds, nxt, targets, broad, startSet, dist, nameOf);
-                    string key = node + "|" + nxt + "|" + type;
-                    if (!edgeMap.TryGetValue(key, out var ge))
+                    string key = cur + "|" + to;
+                    if (!pair.TryGetValue(key, out var ge))
                     {
-                        ge = new GraphEdge { From = node, To = nxt, Type = type };
+                        if (g.Edges.Count >= MaxGraphEdges) continue;
+                        ge = new GraphEdge { From = cur, To = to, Type = type };
+                        pair[key] = ge;
                         g.Edges.Add(ge);
-                        edgeMap[key] = ge;
                     }
-                    // mark the first control (non-membership) edge as the break point
-                    if (!markedWeak && type != "MemberOf")
-                    {
-                        ge.Weak = true;
-                        markedWeak = true;
-                    }
-                    node = nxt;
+                    else if (Priority(type) > Priority(ge.Type)) ge.Type = type;
+                    if (visited.Add(to)) q.Enqueue(to);
                 }
             }
+
+            // mark control edges that step directly into tier-0 as the break point
+            foreach (var ge in g.Edges)
+                if (ge.Type != "MemberOf" && dist.TryGetValue(ge.To, out var d0) && d0 == 0)
+                    ge.Weak = true;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var ge in g.Edges)
+            {
+                AddNode(g, seen, ge.From, targets, broad, starts, dist, nameOf);
+                AddNode(g, seen, ge.To, targets, broad, starts, dist, nameOf);
+            }
             return g;
+        }
+
+        // Preference order when collapsing parallel edges to a single label.
+        private static int Priority(string t)
+        {
+            switch (t)
+            {
+                case "GenericAll": return 100;
+                case "WriteDacl": return 90;
+                case "WriteOwner": return 85;
+                case "Owns": return 80;
+                case "AllExtendedRights": return 75;
+                case "AddKeyCredentialLink": return 70;
+                case "ForceChangePassword": return 65;
+                case "AddMember": return 60;
+                case "DCSync": return 55;
+                case "AllowedToAct": return 50;
+                case "AllowedToDelegate": return 48;
+                case "Unconstrained": return 46;
+                case "ADCS-ESC1": return 44;
+                case "Kerberoast": return 42;
+                case "ASREPRoast": return 40;
+                case "AdminTo": return 30;
+                case "HasSession": return 28;
+                case "MemberOf": return 10;
+                default: return 1;
+            }
         }
 
         private static void AddNode(GraphModel g, HashSet<string> seen, string sid, HashSet<string> targets,

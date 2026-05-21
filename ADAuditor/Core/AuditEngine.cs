@@ -22,10 +22,10 @@ namespace ADAuditor.Core
             new AnomalyChecks(),
             new AclChecks(),
             new AdvancedAclChecks(),
-            new Tier3GraphChecks(),
             new GpoChecks(),
             new CertChecks(),
             new LdapExtraChecks(),
+            new Tier3GraphChecks(),   // after Delegation + Cert so it can fold in their vector edges
             new SysvolChecks(),
             new Tier2HostChecks(),
             new Tier2MemberChecks(),

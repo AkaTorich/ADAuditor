@@ -59,10 +59,11 @@ namespace ADAuditor.Checks
                 .Fix("Use gMSA, enforce 25+ char random passwords on service accounts, and monitor TGS requests.");
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
                 "(&(objectCategory=person)(objectClass=user)(servicePrincipalName=*)(!(sAMAccountName=krbtgt))" + enabled + ")",
-                "sAMAccountName", "servicePrincipalName")))
+                "sAMAccountName", "servicePrincipalName", "objectSid")))
             {
                 var spns = r.Properties["servicePrincipalName"];
                 CheckUtil.AddDetail(kerberoast, CheckUtil.Sam(r) + " [" + (spns.Count > 0 ? spns[0].ToString() : "") + "]");
+                AddVector(ctx, r, "Kerberoast");
             }
             if (kerberoast.Details.Count > 0) yield return kerberoast;
 
@@ -73,9 +74,22 @@ namespace ADAuditor.Checks
                 .Fix("Re-enable pre-authentication on every account.");
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
                 "(&(objectCategory=person)(objectClass=user)" + LdapBit.HasFlag("userAccountControl", (long)Uac.DontRequirePreauth) + ")",
-                "sAMAccountName")))
+                "sAMAccountName", "objectSid")))
+            {
                 CheckUtil.AddDetail(asrep, CheckUtil.Sam(r));
+                AddVector(ctx, r, "ASREPRoast");
+            }
             if (asrep.Details.Count > 0) yield return asrep;
+        }
+
+        // Add a graph vector edge "Authenticated Users -[type]-> account" so Tier 3 can
+        // show that any user can compromise this account (and onward to tier-0).
+        private static void AddVector(AuditContext ctx, System.DirectoryServices.SearchResult r, string type)
+        {
+            var b = CheckUtil.Bytes(r, "objectSid");
+            if (b == null) return;
+            string sid = new System.Security.Principal.SecurityIdentifier(b, 0).Value;
+            ctx.VectorEdges.Add(new GraphEdge { From = "S-1-5-11", To = sid, Type = type });
         }
     }
 }

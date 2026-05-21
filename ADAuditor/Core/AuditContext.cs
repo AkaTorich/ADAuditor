@@ -28,6 +28,10 @@ namespace ADAuditor.Core
         // Filled by the Tier 3 module for the graph visualization (optional).
         public GraphModel AttackGraph { get; set; }
 
+        // Non-ACL escalation vectors (Kerberoast, AS-REP, ADCS-ESC1, ...) that earlier
+        // modules contribute and Tier 3 folds into the attack-path graph as edges.
+        public List<GraphEdge> VectorEdges { get; } = new List<GraphEdge>();
+
         private readonly AuthenticationTypes _auth;
 
         public AuditContext(string server, NetworkCredential credential)

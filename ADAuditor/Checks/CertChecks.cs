@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using System.DirectoryServices;
+using System.Security.Principal;
 using ADAuditor.Core;
 
 namespace ADAuditor.Checks
@@ -13,6 +15,8 @@ namespace ADAuditor.Checks
         private const int PendAllRequests = 0x2;            // msPKI-Enrollment-Flag (manager approval)
         private const int NoSecurityExtension = 0x80000;    // msPKI-Enrollment-Flag (ESC9)
         private const string EkuEnrollmentAgent = "1.3.6.1.4.1.311.20.2.1"; // Certificate Request Agent
+        private static readonly Guid Enroll = new Guid("0e10c968-78fb-11d2-90d4-00c04f79dc55");
+        private static readonly Guid AutoEnroll = new Guid("a05b8cc2-17bc-4802-a710-e7c15ab866a2");
 
         public IEnumerable<Finding> Run(AuditContext ctx)
         {
@@ -66,10 +70,11 @@ namespace ADAuditor.Checks
                 .Why("On a v1 template with enrollee-supplied subject, a requester can inject arbitrary application policies (e.g. client auth) - CVE-2024-49019.")
                 .Fix("Patch CA, raise template schema version, or disable enrollee-supplied subject.");
 
-            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
+            foreach (var r in CheckUtil.Enumerate(CheckUtil.WithDacl(ctx.SubtreeSearcher(
                 "CN=Certificate Templates," + pkiBase, "(objectClass=pKICertificateTemplate)",
                 "cn", "msPKI-Certificate-Name-Flag", "msPKI-Enrollment-Flag", "msPKI-RA-Signature",
-                "pKIExtendedKeyUsage", "msPKI-Certificate-Application-Policy", "msPKI-Template-Schema-Version")))
+                "pKIExtendedKeyUsage", "msPKI-Certificate-Application-Policy", "msPKI-Template-Schema-Version",
+                "nTSecurityDescriptor"))))
             {
                 string cn = AuditContext.Str(r, "cn");
                 int nameFlag = (int)AuditContext.Int64Of(r, "msPKI-Certificate-Name-Flag");
@@ -80,6 +85,10 @@ namespace ADAuditor.Checks
                 bool suppliesSubject = (nameFlag & EnrolleeSuppliesSubject) != 0;
                 bool managerApproval = (enrollFlag & PendAllRequests) != 0;
                 bool needsRaSig = raSig > 0;
+
+                // Only exploitable if a non-privileged principal can actually enroll.
+                bool lowPrivEnroll = LowPrivCanEnroll(CheckUtil.Bytes(r, "nTSecurityDescriptor"), defaults);
+                if (!lowPrivEnroll) continue;
 
                 var ekus = new List<string>();
                 if (r.Properties.Contains("pKIExtendedKeyUsage"))
@@ -109,7 +118,12 @@ namespace ADAuditor.Checks
                 bool anyPurpose = ekus.Count == 0 || ekus.Contains("2.5.29.37.0");
 
                 if (clientAuth)
+                {
                     CheckUtil.AddDetail(esc1, cn + " (enrollee-supplied subject + client-auth, no approval)");
+                    // graph vector: any low-priv user can request a cert as a DA -> domain
+                    if (!string.IsNullOrEmpty(domSid))
+                        ctx.VectorEdges.Add(new GraphEdge { From = "S-1-5-11", To = domSid, Type = "ADCS-ESC1" });
+                }
                 else if (anyPurpose)
                     CheckUtil.AddDetail(noApproval, cn + " (Any-Purpose, no approval)");
             }
@@ -149,6 +163,26 @@ namespace ADAuditor.Checks
                 CheckUtil.AddDetail(esc13, AuditContext.Str(r, "displayName") + " -> " +
                     AuditContext.Str(r, "msDS-OIDToGroupLink"));
             if (esc13.Details.Count > 0) yield return esc13;
+        }
+
+        // True if a non-default principal can enroll (Enroll/AutoEnroll extended right
+        // or full control) - i.e. the template is actually requestable by low-priv users.
+        private static bool LowPrivCanEnroll(byte[] sdb, HashSet<string> defaults)
+        {
+            if (sdb == null) return false;
+            ActiveDirectorySecurity sd;
+            try { sd = CheckUtil.ParseSd(sdb); } catch { return false; }
+            foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+            {
+                if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                if (defaults.Contains(rule.IdentityReference.Value)) continue;
+                var rights = rule.ActiveDirectoryRights;
+                if (CheckUtil.FullControl(rights)) return true;
+                if ((rights & ActiveDirectoryRights.ExtendedRight) != 0 &&
+                    (rule.ObjectType == Guid.Empty || rule.ObjectType == Enroll || rule.ObjectType == AutoEnroll))
+                    return true;
+            }
+            return false;
         }
 
         // Flag non-default principals with object-control rights over PKI objects.
