@@ -88,7 +88,7 @@ Step "S-PwdNeverExpires"   { Set-ADUser victim -PasswordNeverExpires $true }
 Step "S-PasswdNotReqd"     { Set-ADAccountControl victim -PasswordNotRequired $true }
 Step "S-ReversiblePwd"     { Set-ADAccountControl victim -AllowReversiblePasswordEncryption $true }
 Step "S-DesOnly"           { Set-ADAccountControl victim -UseDESKeyOnly $true }
-Step "S-MustChange"        { Set-ADUser victim -ChangePasswordAtLogon $true }
+Step "S-MustChange"        { Set-ADUser svc1 -ChangePasswordAtLogon $true }   # svc1: victim cannot, it has password-never-expires
 Step "S-Expired"           { Set-ADUser victim -AccountExpirationDate (Get-Date).AddDays(-1) }
 Step "S-LegacyOS (OLDBOX)" { if (-not (Get-ADComputer -Filter "Name -eq 'OLDBOX'" -ErrorAction SilentlyContinue)) { New-ADComputer OLDBOX -OperatingSystem "Windows Server 2008 R2" } }
 
@@ -102,7 +102,7 @@ Step "P-PrivNoPreauth"     { Set-ADAccountControl da1 -DoesNotRequirePreAuth $tr
 # ---- Kerberos / delegation ----
 Step "A-Kerberoast"        { setspn -s http/svc1.lab.local svc1 | Out-Null }
 Step "A-AsrepRoast"        { Set-ADAccountControl svc1 -DoesNotRequirePreAuth $true }
-Step "A-Unconstrained"     { Set-ADAccountControl OLDBOX -TrustedForDelegation $true }
+Step "A-Unconstrained"     { Set-ADAccountControl -Identity (Get-ADComputer OLDBOX) -TrustedForDelegation $true }
 Step "A-Constrained"       { Set-ADUser svc1 -Add @{'msDS-AllowedToDelegateTo'='cifs/DC01.lab.local'} }
 Step "A-RBCD"              { Set-ADComputer OLDBOX -PrincipalsAllowedToDelegateToAccount (Get-ADUser svc1) }
 
@@ -119,7 +119,7 @@ Step "A-DomainReversible"  { Set-ADDefaultDomainPasswordPolicy -Identity (Get-AD
 Step "A-DescriptionPassword" { Set-ADUser victim -Description "password: P@ssw0rd1!" }
 Step "A-WeakEncTypes"      { Set-ADUser victim -Replace @{'msDS-SupportedEncryptionTypes'=4} }
 Step "A-AnonymousLdap"     { Set-ADObject "CN=Directory Service,CN=Windows NT,CN=Services,$cfg" -Replace @{dSHeuristics='0000002'} }
-Step "A-PreWin2000"        { Add-ADGroupMember "Pre-Windows 2000 Compatible Access" -Members "S-1-5-7" -ErrorAction SilentlyContinue }
+Step "A-PreWin2000"        { Add-ADGroupMember "Pre-Windows 2000 Compatible Access" -Members "CN=S-1-5-7,CN=ForeignSecurityPrincipals,$dn" }   # Anonymous Logon FSP
 Step "A-Gmsa + X-GmsaRetrievers" {
     if (-not (Get-KdsRootKey -ErrorAction SilentlyContinue)) { Add-KdsRootKey -EffectiveTime ((Get-Date).AddHours(-10)) | Out-Null }
     if (-not (Get-ADServiceAccount -Filter "Name -eq 'gmsa1'" -ErrorAction SilentlyContinue)) {

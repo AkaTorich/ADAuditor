@@ -65,8 +65,11 @@ Step "A-MachineAccountQuota: set quota to 0" {
     Set-ADDomain -Identity $root -Replace @{"ms-DS-MachineAccountQuota"="0"}
 }
 Step "A-RecycleBin: enable AD Recycle Bin (irreversible)" {
-    Enable-ADOptionalFeature -Identity 'Recycle Bin Feature' -Scope ForestOrConfigurationSet `
-        -Target (Get-ADForest).Name -Confirm:$false
+    $rb = Get-ADOptionalFeature -Identity 'Recycle Bin Feature'
+    if ($rb.EnabledScopes.Count -eq 0) {
+        Enable-ADOptionalFeature -Identity 'Recycle Bin Feature' -Scope ForestOrConfigurationSet `
+            -Target (Get-ADForest).Name -Confirm:$false
+    } else { Write-Host "    (already enabled)" -ForegroundColor DarkGray }
 }
 Step "A-AnonymousLdap: reset dSHeuristics" {
     Set-ADObject "CN=Directory Service,CN=Windows NT,CN=Services,$cfg" -Replace @{dSHeuristics='0'} -ErrorAction SilentlyContinue
@@ -93,7 +96,7 @@ Step "P-DnsAdmins / P-BroadInPriv: empty dangerous group memberships" {
     Remove-ADGroupMember "Backup Operators" "Domain Users" -Confirm:$false -ErrorAction SilentlyContinue
 }
 Step "A-PreWin2000: remove Anonymous Logon from Pre-Windows 2000 group" {
-    Remove-ADGroupMember "Pre-Windows 2000 Compatible Access" -Members "S-1-5-7" -Confirm:$false -ErrorAction SilentlyContinue
+    Remove-ADGroupMember "Pre-Windows 2000 Compatible Access" -Members "CN=S-1-5-7,CN=ForeignSecurityPrincipals,$dn" -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 # ---- Kerberos ----
@@ -109,12 +112,24 @@ Step "A-AsrepRoast: re-enable Kerberos pre-auth" {
         if (Get-ADUser -Filter "sAMAccountName -eq '$u'") { Set-ADAccountControl $u -DoesNotRequirePreAuth $false }
     }
 }
-Step "A-Unconstrained / A-Constrained / A-RBCD: clear delegation on OLDBOX/svc1" {
-    if (Get-ADComputer -Filter "Name -eq 'OLDBOX'") {
-        Set-ADAccountControl OLDBOX -TrustedForDelegation $false
-        Set-ADComputer OLDBOX -PrincipalsAllowedToDelegateToAccount $null
-    }
-    if (Get-ADUser -Filter "sAMAccountName -eq 'svc1'") { Set-ADUser svc1 -Clear 'msDS-AllowedToDelegateTo' -ErrorAction SilentlyContinue }
+Step "A-Constrained / A-RBCD / A-Unconstrained: strip delegation from all non-DC accounts" {
+    # constrained delegation (msDS-AllowedToDelegateTo), excluding domain controllers
+    Get-ADObject -LDAPFilter "(msDS-AllowedToDelegateTo=*)" -Properties msDS-AllowedToDelegateTo,userAccountControl |
+        Where-Object { ([int]$_.userAccountControl -band 0x2000) -eq 0 } |
+        ForEach-Object { Set-ADObject $_ -Clear 'msDS-AllowedToDelegateTo' }
+
+    # resource-based constrained delegation (msDS-AllowedToActOnBehalfOfOtherIdentity)
+    Get-ADObject -LDAPFilter "(msDS-AllowedToActOnBehalfOfOtherIdentity=*)" |
+        ForEach-Object { Set-ADObject $_ -Clear 'msDS-AllowedToActOnBehalfOfOtherIdentity' }
+
+    # unconstrained delegation (TRUSTED_FOR_DELEGATION) on non-DC computers
+    Get-ADComputer -LDAPFilter "(userAccountControl:1.2.840.113556.1.4.803:=524288)" -Properties userAccountControl |
+        Where-Object { ([int]$_.userAccountControl -band 0x2000) -eq 0 } |
+        ForEach-Object { Set-ADAccountControl $_ -TrustedForDelegation $false }
+
+    # protocol transition (TRUSTED_TO_AUTH_FOR_DELEGATION)
+    Get-ADObject -LDAPFilter "(userAccountControl:1.2.840.113556.1.4.803:=16777216)" -Properties userAccountControl |
+        ForEach-Object { Set-ADAccountControl $_.DistinguishedName -TrustedToAuthForDelegation $false }
 }
 
 # ---- ACL control edges (closes X-Acl* and T3-AttackPaths) ----
