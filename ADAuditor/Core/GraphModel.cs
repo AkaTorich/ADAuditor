@@ -16,6 +16,7 @@ namespace ADAuditor.Core
         public string From { get; set; }
         public string To { get; set; }
         public string Type { get; set; }      // MemberOf, GenericAll, ...
+        public bool Weak { get; set; }         // recommended break point on a path
     }
 
     public sealed class GraphModel

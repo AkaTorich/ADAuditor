@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using ADAuditor.Core;
+using ADAuditor.Report;
 
 namespace ADAuditor
 {
@@ -23,17 +24,33 @@ namespace ADAuditor
         private static readonly Brush MidBrush = new SolidColorBrush(Color.FromRgb(0x1E, 0x8F, 0x3E));
         private static readonly Brush MemberEdge = new SolidColorBrush(Color.FromRgb(0x2E, 0x6F, 0x42));
         private static readonly Brush ControlEdge = new SolidColorBrush(Color.FromRgb(0xFF, 0xB0, 0x00));
+        private static readonly Brush WeakEdge = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30));
         private static readonly Brush Ink = new SolidColorBrush(Color.FromRgb(0x05, 0x08, 0x05));
 
         private bool _dragging;
         private Point _dragStart;
         private double _panStartX, _panStartY;
+        private GraphModel _graph;
 
         public GraphWindow(GraphModel graph)
         {
             InitializeComponent();
             WinChrome.HookMaxFix(this);
+            _graph = graph;
             Render(graph);
+        }
+
+        private void BtnDot_Click(object sender, RoutedEventArgs e)
+        {
+            if (_graph == null) return;
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                FileName = "ADAudit_attackpaths_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".dot",
+                Filter = "Graphviz DOT (*.dot)|*.dot"
+            };
+            if (dlg.ShowDialog() != true) return;
+            try { System.IO.File.WriteAllText(dlg.FileName, DotGraphWriter.Build(_graph)); }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "Export failed", MessageBoxButton.OK, MessageBoxImage.Error); }
         }
 
         // ---- title bar ----
@@ -141,7 +158,7 @@ namespace ADAuditor
 
             foreach (var e in g.Edges)
                 if (pos.TryGetValue(e.From, out var pf) && pos.TryGetValue(e.To, out var pt))
-                    DrawEdge(pf, pt, e.Type);
+                    DrawEdge(pf, pt, e.Type, e.Weak);
 
             foreach (var n in g.Nodes)
                 if (pos.TryGetValue(n.Id, out var p))
@@ -187,10 +204,10 @@ namespace ADAuditor
             Cv.Children.Add(border);
         }
 
-        private void DrawEdge(Point from, Point to, string type)
+        private void DrawEdge(Point from, Point to, string type, bool weak)
         {
             bool member = type == "MemberOf";
-            Brush stroke = member ? MemberEdge : ControlEdge;
+            Brush stroke = weak ? WeakEdge : (member ? MemberEdge : ControlEdge);
 
             double x1 = from.X + NodeW, y1 = from.Y + NodeH / 2;
             double x2 = to.X, y2 = to.Y + NodeH / 2;
@@ -202,7 +219,7 @@ namespace ADAuditor
                 X2 = x2,
                 Y2 = y2,
                 Stroke = stroke,
-                StrokeThickness = member ? 1 : 1.6
+                StrokeThickness = weak ? 2.8 : (member ? 1 : 1.6)
             });
 
             double ang = Math.Atan2(y2 - y1, x2 - x1);

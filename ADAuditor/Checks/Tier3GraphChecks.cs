@@ -32,11 +32,16 @@ namespace ADAuditor.Checks
             var dnToSid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var groupMembers = new List<(string groupSid, List<string> memberDns)>();
             var edges = new List<(string from, string to, string type)>();
+            var hostToSid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var computers = new List<(string sid, string host)>();
+            var constrained = new List<(string sid, List<string> spns)>();
+            var unconstrained = new List<string>();
 
-            // ---- pass 1: nodes, membership, ACL edges ----
+            // ---- pass 1: nodes, membership, ACL + delegation edges ----
             var s = CheckUtil.WithDacl(ctx.SubtreeSearcher(baseDn,
                 "(|(objectClass=user)(objectClass=group))",
-                "sAMAccountName", "distinguishedName", "objectSid", "objectClass", "member", "nTSecurityDescriptor"));
+                "sAMAccountName", "distinguishedName", "objectSid", "objectClass", "member", "nTSecurityDescriptor",
+                "userAccountControl", "dNSHostName", "msDS-AllowedToDelegateTo", "msDS-AllowedToActOnBehalfOfOtherIdentity"));
             foreach (var r in CheckUtil.Enumerate(s))
             {
                 var sidBytes = CheckUtil.Bytes(r, "objectSid");
@@ -47,6 +52,40 @@ namespace ADAuditor.Checks
                 nameOf[sid] = !string.IsNullOrEmpty(sam) ? sam : ShortDn(dn);
                 if (!string.IsNullOrEmpty(dn)) dnToSid[dn] = sid;
                 bool isGroup = CheckUtil.HasClass(r, "group");
+                bool isComputer = CheckUtil.HasClass(r, "computer");
+                long uac = AuditContext.Int64Of(r, "userAccountControl");
+
+                if (isComputer)
+                {
+                    string host = AuditContext.Str(r, "dNSHostName");
+                    if (!string.IsNullOrEmpty(host)) { hostToSid[host] = sid; computers.Add((sid, host)); }
+                    string flat = sam.EndsWith("$") ? sam.Substring(0, sam.Length - 1) : sam;
+                    if (!string.IsNullOrEmpty(flat)) hostToSid[flat] = sid;
+                }
+                if ((uac & (long)Uac.TrustedForDelegation) != 0 && (uac & (long)Uac.ServerTrustAccount) == 0)
+                    unconstrained.Add(sid);
+                if (r.Properties.Contains("msDS-AllowedToDelegateTo") && r.Properties["msDS-AllowedToDelegateTo"].Count > 0)
+                {
+                    var spns = new List<string>();
+                    foreach (var v in r.Properties["msDS-AllowedToDelegateTo"]) spns.Add(v?.ToString() ?? "");
+                    constrained.Add((sid, spns));
+                }
+                var rbcd = CheckUtil.Bytes(r, "msDS-AllowedToActOnBehalfOfOtherIdentity");
+                if (rbcd != null)
+                {
+                    try
+                    {
+                        var rsd = CheckUtil.ParseSd(rbcd);
+                        foreach (ActiveDirectoryAccessRule ru in rsd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                        {
+                            if (ru.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                            string p = ru.IdentityReference.Value;
+                            if (defaults.Contains(p) || p == sid) continue;
+                            edges.Add((p, sid, "AllowedToAct"));
+                        }
+                    }
+                    catch { }
+                }
 
                 if (isGroup && r.Properties.Contains("member") && r.Properties["member"].Count > 0)
                 {
@@ -93,6 +132,20 @@ namespace ADAuditor.Checks
                 foreach (var dn in g.memberDns)
                     if (dnToSid.TryGetValue(dn, out var msid))
                         edges.Add((msid, g.groupSid, "MemberOf"));
+
+            // ---- delegation edges ----
+            foreach (var cd in constrained)
+                foreach (var spn in cd.spns)
+                {
+                    string host = SpnHost(spn);
+                    if (host != null && hostToSid.TryGetValue(host, out var hsid))
+                        edges.Add((cd.sid, hsid, "AllowedToDelegate"));
+                }
+            foreach (var u in unconstrained)
+                if (!string.IsNullOrEmpty(domSid)) edges.Add((u, domSid, "Unconstrained"));
+
+            // ---- session / local-admin edges (RPC, best-effort) ----
+            RpcCollector.Collect(ctx, computers, nameOf, edges);
 
             // ---- DCSync edges on the domain head ----
             try
@@ -250,7 +303,7 @@ namespace ADAuditor.Checks
         {
             var g = new GraphModel();
             var nodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var edgeKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var edgeMap = new Dictionary<string, GraphEdge>(StringComparer.OrdinalIgnoreCase);
             var startSet = new HashSet<string>(starts, StringComparer.OrdinalIgnoreCase);
 
             foreach (var start in starts)
@@ -258,6 +311,7 @@ namespace ADAuditor.Checks
                 if (!dist.ContainsKey(start)) continue;
                 string node = start;
                 int hops = 0;
+                bool markedWeak = false;
                 AddNode(g, nodeIds, node, targets, broad, startSet, dist, nameOf);
                 while (!targets.Contains(node) && nextHop.ContainsKey(node) && hops++ < MaxHops)
                 {
@@ -265,8 +319,18 @@ namespace ADAuditor.Checks
                     string type = nextType[node];
                     AddNode(g, nodeIds, nxt, targets, broad, startSet, dist, nameOf);
                     string key = node + "|" + nxt + "|" + type;
-                    if (edgeKeys.Add(key))
-                        g.Edges.Add(new GraphEdge { From = node, To = nxt, Type = type });
+                    if (!edgeMap.TryGetValue(key, out var ge))
+                    {
+                        ge = new GraphEdge { From = node, To = nxt, Type = type };
+                        g.Edges.Add(ge);
+                        edgeMap[key] = ge;
+                    }
+                    // mark the first control (non-membership) edge as the break point
+                    if (!markedWeak && type != "MemberOf")
+                    {
+                        ge.Weak = true;
+                        markedWeak = true;
+                    }
                     node = nxt;
                 }
             }
@@ -297,6 +361,18 @@ namespace ADAuditor.Checks
             int i = dn.IndexOf(',');
             string head = i > 0 ? dn.Substring(0, i) : dn;
             return head.StartsWith("CN=", StringComparison.OrdinalIgnoreCase) ? head.Substring(3) : head;
+        }
+
+        // Extract the host part of an SPN, e.g. "cifs/host.dom:445" -> "host.dom".
+        private static string SpnHost(string spn)
+        {
+            if (string.IsNullOrEmpty(spn)) return null;
+            int slash = spn.IndexOf('/');
+            if (slash < 0) return null;
+            string rest = spn.Substring(slash + 1);
+            int cut = rest.IndexOfAny(new[] { ':', '/' });
+            if (cut >= 0) rest = rest.Substring(0, cut);
+            return rest.Length > 0 ? rest : null;
         }
     }
 }
