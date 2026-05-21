@@ -111,7 +111,7 @@ namespace ADAuditor.Checks
                     var rights = rule.ActiveDirectoryRights;
                     var ot = rule.ObjectType;
 
-                    if ((rights & ActiveDirectoryRights.GenericAll) != 0) edges.Add((c, sid, "GenericAll"));
+                    if (CheckUtil.FullControl(rights)) edges.Add((c, sid, "GenericAll"));
                     if ((rights & ActiveDirectoryRights.WriteDacl) != 0) edges.Add((c, sid, "WriteDacl"));
                     if ((rights & ActiveDirectoryRights.WriteOwner) != 0) edges.Add((c, sid, "WriteOwner"));
                     if ((rights & ActiveDirectoryRights.ExtendedRight) != 0)
@@ -159,7 +159,7 @@ namespace ADAuditor.Checks
                         if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
                         string c = rule.IdentityReference.Value;
                         if (defaults.Contains(c)) continue;
-                        bool genAll = (rule.ActiveDirectoryRights & ActiveDirectoryRights.GenericAll) != 0;
+                        bool genAll = CheckUtil.FullControl(rule.ActiveDirectoryRights);
                         bool ext = (rule.ActiveDirectoryRights & ActiveDirectoryRights.ExtendedRight) != 0;
                         bool gc = ext && (rule.ObjectType == GetChanges || rule.ObjectType == Guid.Empty);
                         bool ga = ext && (rule.ObjectType == GetChangesAll || rule.ObjectType == Guid.Empty);

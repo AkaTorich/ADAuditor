@@ -50,7 +50,7 @@ namespace ADAuditor.Checks
                         string sid = rule.IdentityReference.Value;
                         if (defaults.Contains(sid)) continue;
 
-                        bool genAll = (rule.ActiveDirectoryRights & ActiveDirectoryRights.GenericAll) != 0;
+                        bool genAll = CheckUtil.FullControl(rule.ActiveDirectoryRights);
                         bool ext = (rule.ActiveDirectoryRights & ActiveDirectoryRights.ExtendedRight) != 0;
                         bool gc = ext && rule.ObjectType == GetChanges;
                         bool ga = ext && rule.ObjectType == GetChangesAll;
@@ -98,7 +98,7 @@ namespace ADAuditor.Checks
 
                         var rights = rule.ActiveDirectoryRights;
                         bool dangerous =
-                            (rights & ActiveDirectoryRights.GenericAll) != 0 ||
+                            CheckUtil.FullControl(rights) ||
                             (rights & ActiveDirectoryRights.WriteDacl) != 0 ||
                             (rights & ActiveDirectoryRights.WriteOwner) != 0;
                         if (dangerous)

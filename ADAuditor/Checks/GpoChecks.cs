@@ -61,7 +61,7 @@ namespace ADAuditor.Checks
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;
                     bool canWrite =
-                        (rights & ActiveDirectoryRights.GenericAll) != 0 ||
+                        CheckUtil.FullControl(rights) ||
                         (rights & ActiveDirectoryRights.WriteProperty) != 0 ||
                         (rights & ActiveDirectoryRights.WriteDacl) != 0 ||
                         (rights & ActiveDirectoryRights.WriteOwner) != 0;

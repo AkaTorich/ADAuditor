@@ -70,11 +70,13 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="170" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="160" />
+                    <ColumnDefinition Width="130" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="160" />
+                    <ColumnDefinition Width="140" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="130" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -84,22 +86,26 @@
 
                 <TextBlock Grid.Column="0" Text="DC/DOMAIN&gt; " VerticalAlignment="Center" />
                 <TextBox x:Name="TxtServer" Grid.Column="1" VerticalAlignment="Center"
-                         ToolTip="DC hostname or domain DNS. Leave empty to use the current domain." />
+                         ToolTip="Domain DNS name (e.g. lab.local) or DC hostname. Leave empty to use the current domain." />
 
-                <TextBlock Grid.Column="2" Text=" USER&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
-                <TextBox x:Name="TxtUser" Grid.Column="3" VerticalAlignment="Center"
+                <TextBlock Grid.Column="2" Text=" IP&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
+                <TextBox x:Name="TxtIp" Grid.Column="3" VerticalAlignment="Center"
+                         ToolTip="Optional DC IP address. If set, the LDAP connection goes straight to this IP (use when DNS does not resolve the domain)." />
+
+                <TextBlock Grid.Column="4" Text=" USER&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
+                <TextBox x:Name="TxtUser" Grid.Column="5" VerticalAlignment="Center"
                          ToolTip="DOMAIN\user. Leave empty to use current Windows credentials." />
 
-                <TextBlock Grid.Column="4" Text=" PASS&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
-                <PasswordBox x:Name="TxtPass" Grid.Column="5" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="6" Text=" PASS&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
+                <PasswordBox x:Name="TxtPass" Grid.Column="7" VerticalAlignment="Center" />
 
-                <Button x:Name="BtnRun" Grid.Column="7" Content="[ EXECUTE ]" Margin="10,0,6,0"
+                <Button x:Name="BtnRun" Grid.Column="9" Content="[ EXECUTE ]" Margin="10,0,6,0"
                         Click="BtnRun_Click" />
-                <Button x:Name="BtnExport" Grid.Column="8" Content="[ HTML ]" Margin="0,0,6,0"
+                <Button x:Name="BtnExport" Grid.Column="10" Content="[ HTML ]" Margin="0,0,6,0"
                         Click="BtnExport_Click" IsEnabled="False" />
-                <Button x:Name="BtnExportCsv" Grid.Column="9" Content="[ CSV ]" Margin="0,0,6,0"
+                <Button x:Name="BtnExportCsv" Grid.Column="11" Content="[ CSV ]" Margin="0,0,6,0"
                         Click="BtnExportCsv_Click" IsEnabled="False" />
-                <Button x:Name="BtnGraph" Grid.Column="10" Content="[ GRAPH ]"
+                <Button x:Name="BtnGraph" Grid.Column="12" Content="[ GRAPH ]"
                         Click="BtnGraph_Click" IsEnabled="False" />
             </Grid>
         </Border>

@@ -46,7 +46,7 @@ namespace ADAuditor.Checks
                             var rights = rule.ActiveDirectoryRights;
                             if ((rights & ActiveDirectoryRights.WriteDacl) != 0 ||
                                 (rights & ActiveDirectoryRights.WriteOwner) != 0 ||
-                                (rights & ActiveDirectoryRights.GenericAll) != 0)
+                                CheckUtil.FullControl(rights))
                                 CheckUtil.AddDetail(privExchange, CheckUtil.TranslateSid(rule.IdentityReference.Value) + " : " + rights);
                         }
                     }

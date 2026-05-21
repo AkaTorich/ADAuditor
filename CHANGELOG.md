@@ -4,6 +4,30 @@ All notable changes to **AD_AUDITOR** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-05-21
+
+### Added
+- **Separate IP address field** in the connection bar. When set, the LDAP connection
+  goes straight to that DC IP (DNS-independent) while the DC/DOMAIN field is kept as
+  the domain label - useful when DNS does not resolve the domain.
+
+### Fixed
+- **Full Control (GenericAll) detection corrected.** `ActiveDirectoryRights.GenericAll`
+  is a composite mask that also covers ordinary read bits (ReadControl/ReadProperty),
+  so the previous `(rights & GenericAll) != 0` test matched harmless read ACEs. All
+  checks now require the complete mask (`CheckUtil.FullControl`). This removes large
+  numbers of false positives in `X-DCSync`, `X-AdminSDHolder`, `X-AclGenericAll`,
+  `X-AclOuControl`, `G-GpoWritable` and the Tier 3 graph - a freshly promoted default
+  domain now yields a clean baseline instead of dozens of phantom findings (including
+  a false `T3-BroadToTier0`).
+
+### Changed
+- **Expanded the built-in / default-principal exclusion list** so default AD
+  delegations are not flagged: Cert Publishers, Group Policy Creator Owners,
+  Pre-Windows 2000 Compatible Access, Windows Authorization Access Group,
+  Distributed COM Users, IIS_IUSRS, RODC password-replication groups,
+  LocalService/NetworkService and others.
+
 ## [1.1.0] - 2026-05-21
 
 ### Added

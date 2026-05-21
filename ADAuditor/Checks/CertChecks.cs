@@ -172,7 +172,7 @@ namespace ADAuditor.Checks
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;
-                    if ((rights & System.DirectoryServices.ActiveDirectoryRights.GenericAll) != 0 ||
+                    if (CheckUtil.FullControl(rights) ||
                         (rights & System.DirectoryServices.ActiveDirectoryRights.WriteDacl) != 0 ||
                         (rights & System.DirectoryServices.ActiveDirectoryRights.WriteOwner) != 0 ||
                         (rights & System.DirectoryServices.ActiveDirectoryRights.WriteProperty) != 0)

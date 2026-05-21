@@ -102,6 +102,8 @@ namespace ADAuditor.Checks
             var s = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "S-1-5-18",      // LocalSystem
+                "S-1-5-19",      // LocalService
+                "S-1-5-20",      // NetworkService
                 "S-1-5-10",      // Self / Principal Self
                 "S-1-3-0",       // Creator Owner
                 "S-1-5-9",       // Enterprise Domain Controllers
@@ -109,15 +111,45 @@ namespace ADAuditor.Checks
                 "S-1-5-32-548",  // Account Operators (broad by design)
                 "S-1-5-32-549",  // Server Operators
                 "S-1-5-32-550",  // Print Operators
-                "S-1-5-32-551"   // Backup Operators
+                "S-1-5-32-551",  // Backup Operators
+                "S-1-5-32-554",  // Pre-Windows 2000 Compatible Access
+                "S-1-5-32-557",  // Incoming Forest Trust Builders
+                "S-1-5-32-560",  // Windows Authorization Access Group
+                "S-1-5-32-561",  // Terminal Server License Servers
+                "S-1-5-32-562",  // Distributed COM Users
+                "S-1-5-32-568"   // IIS_IUSRS
             };
             if (!string.IsNullOrEmpty(domSid))
             {
-                foreach (var rid in new[] { "-512", "-516", "-518", "-519", "-498", "-500", "-502", "-516", "-526", "-527" })
+                // RID-based built-ins that hold default delegations on a clean domain
+                foreach (var rid in new[]
+                {
+                    "-500", // Administrator
+                    "-502", // krbtgt
+                    "-512", // Domain Admins
+                    "-516", // Domain Controllers
+                    "-517", // Cert Publishers
+                    "-518", // Schema Admins
+                    "-519", // Enterprise Admins
+                    "-520", // Group Policy Creator Owners
+                    "-521", // Read-only Domain Controllers
+                    "-498", // Enterprise Read-only Domain Controllers
+                    "-526", // Key Admins
+                    "-527", // Enterprise Key Admins
+                    "-553", // RAS and IAS Servers
+                    "-571", // Allowed RODC Password Replication Group
+                    "-572"  // Denied RODC Password Replication Group
+                })
                     s.Add(domSid + rid);
             }
             return s;
         }
+
+        // True only for a real Full Control ACE. ActiveDirectoryRights.GenericAll is a
+        // composite mask (0xF01FF incl. ReadControl/ReadProperty), so "& GenericAll != 0"
+        // would match ordinary read ACEs; require ALL the bits to be present.
+        public static bool FullControl(ActiveDirectoryRights r)
+            => (r & ActiveDirectoryRights.GenericAll) == ActiveDirectoryRights.GenericAll;
 
         // Set the searcher up to return security descriptors (DACL + owner).
         public static DirectorySearcher WithDacl(DirectorySearcher s)

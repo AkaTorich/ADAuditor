@@ -68,17 +68,24 @@ namespace ADAuditor
             TxtDetails.Text = "// running ...";
             _report = null;
 
-            string server = TxtServer.Text?.Trim();
+            string domain = TxtServer.Text?.Trim();
+            string ip = TxtIp.Text?.Trim();
             NetworkCredential cred = BuildCredential(TxtUser.Text, TxtPass.Password);
 
-            SetStatus("connecting to " + (string.IsNullOrEmpty(server) ? "current domain" : server) + " ...");
+            // Connect by IP when provided (DNS-independent); otherwise by domain/DC name.
+            string connectHost = !string.IsNullOrEmpty(ip) ? ip : domain;
+
+            SetStatus("connecting to " + (string.IsNullOrEmpty(connectHost) ? "current domain" : connectHost) + " ...");
             Log("[*] AD_AUDITOR session start " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            if (!string.IsNullOrEmpty(ip))
+                Log("[*] Connecting directly to DC IP " + ip +
+                    (string.IsNullOrEmpty(domain) ? "" : " (domain: " + domain + ")"));
 
             try
             {
                 var report = await Task.Run(() =>
                 {
-                    using (var ctx = new AuditContext(server, cred))
+                    using (var ctx = new AuditContext(connectHost, cred))
                     {
                         ctx.Log = Log;
                         ctx.Connect();

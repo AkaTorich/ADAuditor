@@ -77,7 +77,7 @@ namespace ADAuditor.Checks
                     var rights = rule.ActiveDirectoryRights;
                     var ot = rule.ObjectType;
 
-                    if ((rights & Full) != 0)
+                    if ((rights & Full) == Full)
                         CheckUtil.AddDetail(genericAll, Who(sid) + " -> " + name);
                     if ((rights & WriteDacl) != 0 || (rights & WriteOwner) != 0)
                         CheckUtil.AddDetail(writeDaclOwner, Who(sid) + " -> " + name);
@@ -97,7 +97,7 @@ namespace ADAuditor.Checks
                         CheckUtil.AddDetail(shadowWrite, Who(sid) + " -> " + name);
 
                     // GenericAll implicitly grants LAPS read too
-                    if (laps != null && (rights & Full) != 0 && CheckUtil.HasClass(r, "computer"))
+                    if (laps != null && (rights & Full) == Full && CheckUtil.HasClass(r, "computer"))
                         CheckUtil.AddDetail(lapsRead, Who(sid) + " -> " + name + " (via GenericAll)");
                 }
             }
@@ -134,7 +134,7 @@ namespace ADAuditor.Checks
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;
                     var ot = rule.ObjectType;
-                    if ((rights & Full) != 0 || (rights & WriteDacl) != 0 || (rights & WriteOwner) != 0)
+                    if ((rights & Full) == Full || (rights & WriteDacl) != 0 || (rights & WriteOwner) != 0)
                         CheckUtil.AddDetail(ouControl, Who(sid) + " -> " + dn);
                     if ((rights & WriteProp) != 0 && (ot == GpLink || ot == Guid.Empty))
                         CheckUtil.AddDetail(gpLinkWrite, Who(sid) + " -> " + dn);
