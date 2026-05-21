@@ -4,6 +4,32 @@ All notable changes to **AD_AUDITOR** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-05-21
+
+### Added
+- **Attack-path graph: BloodHound-style escalation vectors as edges.** Kerberoast and
+  AS-REP roasting (`Authenticated Users -> account`) and AD CS ESC1
+  (`Authenticated Users -> domain`) are folded into the Tier 3 graph, so credential-theft
+  vectors now appear as paths, not just findings.
+- **Expanded tier-0 target set** where membership/control itself equals DC compromise:
+  Account/Server/Print/Backup Operators, DnsAdmins, and domain controller computer
+  objects. This surfaces multi-hop paths such as
+  `Authenticated Users -[Kerberoast]-> svc -[AllowedToDelegate]-> DC` or
+  `Domain Users -[MemberOf]-> Backup Operators`.
+
+### Changed
+- **The graph now renders the full escalation subgraph** - the union of every path from a
+  non-privileged entry point to tier-0 - instead of a single shortest path per source.
+  Parallel edges between a pair collapse to the strongest type, and legitimate admins
+  (e.g. built-in Administrator) are kept out by forward-traversing only from real entry points.
+- **AD CS ESC checks gated on real enrollment rights.** ESC1/ESC2/ESC3/ESC9/ESC15 now
+  flag a template only when a non-privileged principal can actually enroll in it
+  (Certificate-Enrollment / AutoEnroll right or full control).
+
+### Fixed
+- Removed ESC false positives on default CA templates, which are configured with
+  enrollee-supplied subject etc. but are only enrollable by administrators.
+
 ## [1.2.0] - 2026-05-21
 
 ### Added
