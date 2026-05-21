@@ -8,6 +8,7 @@ namespace ADAuditor.Checks
 {
     // Targeted, high-value LDAP rules: Exchange/PrivExchange, Azure AD Connect,
     // fine-grained password policies, ADIDNS, and authentication policy silos.
+    // Each rule is isolated so a missing optional container/partition cannot abort the rest.
     public sealed class LdapExtraChecks : ICheck
     {
         public string Name => "Extra LDAP Rules";
@@ -23,18 +24,17 @@ namespace ADAuditor.Checks
                 "Exchange security groups hold dangerous rights over the domain")
                 .Why("Exchange Windows Permissions / Exchange Trusted Subsystem with WriteDacl on the domain head is the PrivExchange path - relay an Exchange server's auth and grant yourself DCSync.")
                 .Fix("Remove WriteDacl from Exchange groups on the domain object (apply Microsoft's split-permissions / AD hardening).");
-            var exchangeSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var gn in new[] { "Exchange Windows Permissions", "Exchange Trusted Subsystem", "Organization Management" })
-                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
-                    "(&(objectClass=group)(sAMAccountName=" + gn + "))", "objectSid")))
-                {
-                    var b = CheckUtil.Bytes(r, "objectSid");
-                    if (b != null) exchangeSids.Add(new SecurityIdentifier(b, 0).Value);
-                }
-            if (exchangeSids.Count > 0)
+            try
             {
-                try
-                {
+                var exchangeSids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var gn in new[] { "Exchange Windows Permissions", "Exchange Trusted Subsystem", "Organization Management" })
+                    foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
+                        "(&(objectClass=group)(sAMAccountName=" + gn + "))", "objectSid")))
+                    {
+                        var b = CheckUtil.Bytes(r, "objectSid");
+                        if (b != null) exchangeSids.Add(new SecurityIdentifier(b, 0).Value);
+                    }
+                if (exchangeSids.Count > 0)
                     using (var dom = ctx.Bind(baseDn))
                     {
                         dom.Options.SecurityMasks = SecurityMasks.Dacl;
@@ -50,9 +50,8 @@ namespace ADAuditor.Checks
                                 CheckUtil.AddDetail(privExchange, CheckUtil.TranslateSid(rule.IdentityReference.Value) + " : " + rights);
                         }
                     }
-                }
-                catch (Exception ex) { ctx.Log?.Invoke("    [!] PrivExchange DACL read failed: " + ex.Message); }
             }
+            catch (Exception ex) { ctx.Log?.Invoke("    [!] PrivExchange check skipped: " + ex.Message); }
             if (privExchange.Details.Count > 0) yield return privExchange;
 
             // ---- Azure AD Connect synchronization account ----
@@ -60,10 +59,14 @@ namespace ADAuditor.Checks
                 "Azure AD Connect synchronization account present")
                 .Why("MSOL_/AAD_ accounts typically hold directory-replication (DCSync) rights; compromising the AAD Connect server yields every hash in the domain.")
                 .Fix("Treat the AAD Connect server and its sync account as tier-0; protect and monitor them.");
-            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
-                "(&(objectClass=user)(|(sAMAccountName=MSOL_*)(sAMAccountName=AAD_*)))",
-                "sAMAccountName", "description")))
-                CheckUtil.AddDetail(aadc, CheckUtil.Sam(r) + " : " + AuditContext.Str(r, "description"));
+            try
+            {
+                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
+                    "(&(objectClass=user)(|(sAMAccountName=MSOL_*)(sAMAccountName=AAD_*)))",
+                    "sAMAccountName", "description")))
+                    CheckUtil.AddDetail(aadc, CheckUtil.Sam(r) + " : " + AuditContext.Str(r, "description"));
+            }
+            catch (Exception ex) { ctx.Log?.Invoke("    [!] AAD Connect check skipped: " + ex.Message); }
             if (aadc.Details.Count > 0) yield return aadc;
 
             // ---- fine-grained (PSO) password policies ----
@@ -71,22 +74,26 @@ namespace ADAuditor.Checks
                 "Weak fine-grained password policy (PSO)")
                 .Why("A weak PSO overrides the domain policy for the principals it targets, creating a soft spot for spraying.")
                 .Fix("Raise PSO minimum length/complexity/lockout to match or exceed the domain policy.");
-            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
-                "CN=Password Settings Container,CN=System," + baseDn,
-                "(objectClass=msDS-PasswordSettings)",
-                "cn", "msDS-MinimumPasswordLength", "msDS-PasswordComplexityEnabled", "msDS-LockoutThreshold")))
+            try
             {
-                string cn = AuditContext.Str(r, "cn");
-                int minLen = AuditContext.ParseInt(AuditContext.Str(r, "msDS-MinimumPasswordLength"));
-                bool complex = string.Equals(AuditContext.Str(r, "msDS-PasswordComplexityEnabled"), "TRUE", StringComparison.OrdinalIgnoreCase);
-                int lockout = AuditContext.ParseInt(AuditContext.Str(r, "msDS-LockoutThreshold"));
-                var issues = new List<string>();
-                if (minLen < 12) issues.Add("minLen=" + minLen);
-                if (!complex) issues.Add("complexity off");
-                if (lockout == 0) issues.Add("no lockout");
-                if (issues.Count > 0)
-                    CheckUtil.AddDetail(pso, cn + " (" + string.Join(", ", issues) + ")");
+                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
+                    "CN=Password Settings Container,CN=System," + baseDn,
+                    "(objectClass=msDS-PasswordSettings)",
+                    "cn", "msDS-MinimumPasswordLength", "msDS-PasswordComplexityEnabled", "msDS-LockoutThreshold")))
+                {
+                    string cn = AuditContext.Str(r, "cn");
+                    int minLen = AuditContext.ParseInt(AuditContext.Str(r, "msDS-MinimumPasswordLength"));
+                    bool complex = string.Equals(AuditContext.Str(r, "msDS-PasswordComplexityEnabled"), "TRUE", StringComparison.OrdinalIgnoreCase);
+                    int lockout = AuditContext.ParseInt(AuditContext.Str(r, "msDS-LockoutThreshold"));
+                    var issues = new List<string>();
+                    if (minLen < 12) issues.Add("minLen=" + minLen);
+                    if (!complex) issues.Add("complexity off");
+                    if (lockout == 0) issues.Add("no lockout");
+                    if (issues.Count > 0)
+                        CheckUtil.AddDetail(pso, cn + " (" + string.Join(", ", issues) + ")");
+                }
             }
+            catch (Exception ex) { ctx.Log?.Invoke("    [!] PSO check skipped: " + ex.Message); }
             if (pso.Details.Count > 0) yield return pso;
 
             // ---- ADIDNS: who can create DNS records, plus wildcard records ----
@@ -100,38 +107,50 @@ namespace ADAuditor.Checks
                 .Fix("Review and remove unnecessary wildcard records.");
             foreach (var part in new[] { "DC=DomainDnsZones," + baseDn, "CN=MicrosoftDNS,CN=System," + baseDn })
             {
-                foreach (var z in CheckUtil.Enumerate(CheckUtil.WithDacl(ctx.SubtreeSearcher(part,
-                    "(objectClass=dnsZone)", "name", "distinguishedName", "nTSecurityDescriptor"))))
+                try
                 {
-                    byte[] sdb = CheckUtil.Bytes(z, "nTSecurityDescriptor");
-                    string zone = AuditContext.Str(z, "name");
-                    if (sdb == null) continue;
-                    ActiveDirectorySecurity sd;
-                    try { sd = CheckUtil.ParseSd(sdb); } catch { continue; }
-                    foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                    foreach (var z in CheckUtil.Enumerate(CheckUtil.WithDacl(ctx.SubtreeSearcher(part,
+                        "(objectClass=dnsZone)", "name", "distinguishedName", "nTSecurityDescriptor"))))
                     {
-                        if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
-                        string sid = rule.IdentityReference.Value;
-                        if (sid != "S-1-5-11" && sid != "S-1-1-0") continue; // Authenticated Users / Everyone
-                        if ((rule.ActiveDirectoryRights & ActiveDirectoryRights.CreateChild) != 0)
-                            CheckUtil.AddDetail(adidns, zone + " : " + CheckUtil.TranslateSid(sid) + " can create records");
+                        byte[] sdb = CheckUtil.Bytes(z, "nTSecurityDescriptor");
+                        string zone = AuditContext.Str(z, "name");
+                        if (sdb == null) continue;
+                        ActiveDirectorySecurity sd;
+                        try { sd = CheckUtil.ParseSd(sdb); } catch { continue; }
+                        foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+                        {
+                            if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                            string sid = rule.IdentityReference.Value;
+                            if (sid != "S-1-5-11" && sid != "S-1-1-0") continue; // Authenticated Users / Everyone
+                            if ((rule.ActiveDirectoryRights & ActiveDirectoryRights.CreateChild) != 0)
+                                CheckUtil.AddDetail(adidns, zone + " : " + CheckUtil.TranslateSid(sid) + " can create records");
+                        }
                     }
+                    foreach (var n in CheckUtil.Enumerate(ctx.SubtreeSearcher(part,
+                        "(&(objectClass=dnsNode)(name=\\2a))", "distinguishedName")))
+                        CheckUtil.AddDetail(wildcard, CheckUtil.Dn(n));
                 }
-                // wildcard nodes (RDN literally "*")
-                foreach (var n in CheckUtil.Enumerate(ctx.SubtreeSearcher(part,
-                    "(&(objectClass=dnsNode)(name=\\2a))", "distinguishedName")))
-                    CheckUtil.AddDetail(wildcard, CheckUtil.Dn(n));
+                catch (Exception ex) { ctx.Log?.Invoke("    [!] ADIDNS check on " + part + " skipped: " + ex.Message); }
             }
             if (adidns.Details.Count > 0) yield return adidns;
             if (wildcard.Details.Count > 0) yield return wildcard;
 
             // ---- authentication policy silos (tier-0 isolation) ----
             int siloCount = 0;
-            foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
-                "CN=AuthN Policy Configuration,CN=Services," + ctx.ConfigurationNamingContext,
-                "(objectClass=msDS-AuthNPolicySilo)", "cn")))
-                siloCount++;
-            if (siloCount == 0)
+            bool siloOk = true;
+            try
+            {
+                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
+                    "CN=AuthN Policy Configuration,CN=Services," + ctx.ConfigurationNamingContext,
+                    "(objectClass=msDS-AuthNPolicySilo)", "cn")))
+                    siloCount++;
+            }
+            catch (Exception ex)
+            {
+                // container absent => no silos defined (still worth reporting)
+                ctx.Log?.Invoke("    [!] auth-silo container not found (treated as 0): " + ex.Message);
+            }
+            if (siloOk && siloCount == 0)
                 yield return new Finding("E-NoAuthSilo", Category.Anomalies, Severity.Low, 4,
                     "No Authentication Policy Silos defined")
                     .Why("Silos (with Protected Users) confine tier-0 admin logons to specific hosts and block credential theft/relay reuse.")
