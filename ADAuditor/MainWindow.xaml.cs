@@ -231,6 +231,28 @@ namespace ADAuditor
             new GraphWindow(_report.AttackGraph) { Owner = this }.Show();
         }
 
+        private ToolTip _focusTip;
+
+        // Show the field's tooltip immediately when it gets focus (click/tab), hide on blur.
+        private void Field_ShowTip(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.ToolTip is string txt && !string.IsNullOrEmpty(txt))
+            {
+                _focusTip = new ToolTip
+                {
+                    Content = txt,
+                    PlacementTarget = fe,
+                    Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+                    IsOpen = true
+                };
+            }
+        }
+
+        private void Field_HideTip(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+        {
+            if (_focusTip != null) { _focusTip.IsOpen = false; _focusTip = null; }
+        }
+
         private static NetworkCredential BuildCredential(string user, string pass)
         {
             if (string.IsNullOrWhiteSpace(user)) return null;

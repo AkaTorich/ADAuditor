@@ -139,6 +139,7 @@
                 <Setter Property="FontSize" Value="12" />
                 <Setter Property="Padding" Value="7,4" />
                 <Setter Property="HasDropShadow" Value="False" />
+                <Setter Property="MaxWidth" Value="500" />
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ToolTip">
@@ -146,7 +147,11 @@
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
                                     Padding="{TemplateBinding Padding}">
-                                <ContentPresenter />
+                                <TextBlock Text="{TemplateBinding Content}"
+                                           Foreground="{TemplateBinding Foreground}"
+                                           FontFamily="{TemplateBinding FontFamily}"
+                                           FontSize="{TemplateBinding FontSize}"
+                                           TextWrapping="Wrap" />
                             </Border>
                         </ControlTemplate>
                     </Setter.Value>

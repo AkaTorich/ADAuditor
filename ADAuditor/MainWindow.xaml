@@ -86,18 +86,26 @@
 
                 <TextBlock Grid.Column="0" Text="DC/DOMAIN&gt; " VerticalAlignment="Center" />
                 <TextBox x:Name="TxtServer" Grid.Column="1" VerticalAlignment="Center"
-                         ToolTip="Domain DNS name (e.g. lab.local) or DC hostname. Leave empty to use the current domain." />
+                         ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="60000" ToolTipService.BetweenShowDelay="0"
+                         GotKeyboardFocus="Field_ShowTip" LostKeyboardFocus="Field_HideTip"
+                         ToolTip="Domain DNS name (e.g. lab.local) or DC hostname. Leave empty on a domain-joined host to use the current domain." />
 
                 <TextBlock Grid.Column="2" Text=" IP&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
                 <TextBox x:Name="TxtIp" Grid.Column="3" VerticalAlignment="Center"
+                         ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="60000" ToolTipService.BetweenShowDelay="0"
+                         GotKeyboardFocus="Field_ShowTip" LostKeyboardFocus="Field_HideTip"
                          ToolTip="Only needed in REMOTE mode. Optional DC IP address - if set, the LDAP connection goes straight to this IP (use when DNS does not resolve the domain). Leave empty on a domain-joined host." />
 
                 <TextBlock Grid.Column="4" Text=" USER&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
                 <TextBox x:Name="TxtUser" Grid.Column="5" VerticalAlignment="Center"
+                         ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="60000" ToolTipService.BetweenShowDelay="0"
+                         GotKeyboardFocus="Field_ShowTip" LostKeyboardFocus="Field_HideTip"
                          ToolTip="Only needed in REMOTE mode (auditing a domain this machine is not joined to). Format: DOMAIN\user. Leave empty on a domain-joined host to use the current Windows session." />
 
                 <TextBlock Grid.Column="6" Text=" PASS&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
                 <PasswordBox x:Name="TxtPass" Grid.Column="7" VerticalAlignment="Center"
+                             ToolTipService.InitialShowDelay="0" ToolTipService.ShowDuration="60000" ToolTipService.BetweenShowDelay="0"
+                             GotKeyboardFocus="Field_ShowTip" LostKeyboardFocus="Field_HideTip"
                              ToolTip="Only needed in REMOTE mode (with the USER field). Leave empty on a domain-joined host to use the current Windows session." />
 
                 <Button x:Name="BtnRun" Grid.Column="9" Content="[ EXECUTE ]" Margin="10,0,6,0"
