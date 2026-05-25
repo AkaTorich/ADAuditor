@@ -90,14 +90,15 @@
 
                 <TextBlock Grid.Column="2" Text=" IP&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
                 <TextBox x:Name="TxtIp" Grid.Column="3" VerticalAlignment="Center"
-                         ToolTip="Optional DC IP address. If set, the LDAP connection goes straight to this IP (use when DNS does not resolve the domain)." />
+                         ToolTip="Only needed in REMOTE mode. Optional DC IP address - if set, the LDAP connection goes straight to this IP (use when DNS does not resolve the domain). Leave empty on a domain-joined host." />
 
                 <TextBlock Grid.Column="4" Text=" USER&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
                 <TextBox x:Name="TxtUser" Grid.Column="5" VerticalAlignment="Center"
-                         ToolTip="DOMAIN\user. Leave empty to use current Windows credentials." />
+                         ToolTip="Only needed in REMOTE mode (auditing a domain this machine is not joined to). Format: DOMAIN\user. Leave empty on a domain-joined host to use the current Windows session." />
 
                 <TextBlock Grid.Column="6" Text=" PASS&gt; " VerticalAlignment="Center" Margin="10,0,0,0" />
-                <PasswordBox x:Name="TxtPass" Grid.Column="7" VerticalAlignment="Center" />
+                <PasswordBox x:Name="TxtPass" Grid.Column="7" VerticalAlignment="Center"
+                             ToolTip="Only needed in REMOTE mode (with the USER field). Leave empty on a domain-joined host to use the current Windows session." />
 
                 <Button x:Name="BtnRun" Grid.Column="9" Content="[ EXECUTE ]" Margin="10,0,6,0"
                         Click="BtnRun_Click" />

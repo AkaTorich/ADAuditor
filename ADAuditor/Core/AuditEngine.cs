@@ -22,6 +22,7 @@ namespace ADAuditor.Core
             new AnomalyChecks(),
             new AclChecks(),
             new AdvancedAclChecks(),
+            new BadSuccessorChecks(),
             new GpoChecks(),
             new CertChecks(),
             new LdapExtraChecks(),

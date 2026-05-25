@@ -45,6 +45,9 @@ namespace ADAuditor.Checks
             var esc10Sch = F("T2-Esc10Schannel", Severity.High, 12, "Weak Schannel certificate mapping (ESC10)",
                 "CertificateMappingMethods including UPN (0x4) enables weak/forgeable certificate mapping.",
                 "Remove the 0x4 (UPN) bit from Schannel CertificateMappingMethods.");
+            var noLmHash = F("T2-NoLMHash", Severity.Medium, 8, "LM hashes not blocked from storage",
+                "Without NoLMHash, account LM hashes are stored - trivially crackable to the cleartext password.",
+                "Set NoLMHash=1 (Network security: Do not store LAN Manager hash value).");
             var spooler = F("T2-Spooler", Severity.High, 12, "Print Spooler running on DC",
                 "A running spooler exposes the Printer Bug / PetitPotam coercion used to relay DC authentication (e.g. to ADCS or for unconstrained-delegation theft).",
                 "Stop and disable the Print Spooler service on domain controllers.");
@@ -79,6 +82,9 @@ namespace ADAuditor.Checks
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL");
                         if (v == null || v == 0) CheckUtil.AddDetail(lsaPpl, host);
+
+                        v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "NoLMHash");
+                        if (v == null || v == 0) CheckUtil.AddDetail(noLmHash, host);
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\NTDS\Parameters", "LDAPServerIntegrity");
                         if (v != 2) CheckUtil.AddDetail(ldapSign, host + " (LDAPServerIntegrity=" + (v?.ToString() ?? "unset") + ")");
@@ -117,6 +123,7 @@ namespace ADAuditor.Checks
             if (ntlmLevel.Details.Count > 0) yield return ntlmLevel;
             if (wdigest.Details.Count > 0) yield return wdigest;
             if (lsaPpl.Details.Count > 0) yield return lsaPpl;
+            if (noLmHash.Details.Count > 0) yield return noLmHash;
             if (ldapSign.Details.Count > 0) yield return ldapSign;
             if (ldapCbt.Details.Count > 0) yield return ldapCbt;
             if (esc10Kdc.Details.Count > 0) yield return esc10Kdc;

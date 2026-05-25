@@ -105,15 +105,31 @@ namespace ADAuditor.Checks
                 "Wildcard DNS records present")
                 .Why("A wildcard (*) record can be abused to answer arbitrary name lookups.")
                 .Fix("Review and remove unnecessary wildcard records.");
+            var dnsUpdate = new Finding("E-DnsInsecureUpdate", Category.Anomalies, Severity.Medium, 8,
+                "AD-integrated DNS zones allow nonsecure dynamic updates")
+                .Why("Nonsecure dynamic updates let any host (even unauthenticated) overwrite DNS records, enabling spoofing and relay.")
+                .Fix("Set the zone to 'Secure only' dynamic updates.");
             foreach (var part in new[] { "DC=DomainDnsZones," + baseDn, "CN=MicrosoftDNS,CN=System," + baseDn })
             {
                 try
                 {
                     foreach (var z in CheckUtil.Enumerate(CheckUtil.WithDacl(ctx.SubtreeSearcher(part,
-                        "(objectClass=dnsZone)", "name", "distinguishedName", "nTSecurityDescriptor"))))
+                        "(objectClass=dnsZone)", "name", "distinguishedName", "nTSecurityDescriptor", "dNSProperty"))))
                     {
                         byte[] sdb = CheckUtil.Bytes(z, "nTSecurityDescriptor");
                         string zone = AuditContext.Str(z, "name");
+
+                        // nonsecure dynamic updates (DSPROPERTY_ZONE_ALLOW_UPDATE == 1)
+                        if (z.Properties.Contains("dNSProperty"))
+                            foreach (var pv in z.Properties["dNSProperty"])
+                            {
+                                var blob = pv as byte[];
+                                if (blob == null || blob.Length < 24) continue;
+                                uint id = BitConverter.ToUInt32(blob, 16);
+                                if (id == 0x02 && BitConverter.ToUInt32(blob, 20) == 1)
+                                    CheckUtil.AddDetail(dnsUpdate, zone + " (nonsecure updates allowed)");
+                            }
+
                         if (sdb == null) continue;
                         ActiveDirectorySecurity sd;
                         try { sd = CheckUtil.ParseSd(sdb); } catch { continue; }
@@ -134,6 +150,7 @@ namespace ADAuditor.Checks
             }
             if (adidns.Details.Count > 0) yield return adidns;
             if (wildcard.Details.Count > 0) yield return wildcard;
+            if (dnsUpdate.Details.Count > 0) yield return dnsUpdate;
 
             // ---- authentication policy silos (tier-0 isolation) ----
             int siloCount = 0;

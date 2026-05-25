@@ -34,13 +34,19 @@ namespace ADAuditor.Checks
             var esc8 = F("C-ESC8", Severity.High, 15, "AD CS web enrollment exposed over HTTP/NTLM (ESC8)",
                 "An HTTP enrollment endpoint accepting NTLM can be targeted by relay (coerce a DC, relay to certsrv, obtain a DC certificate).",
                 "Disable HTTP web enrollment, enforce HTTPS with Extended Protection, or remove the role.");
+            var esc6 = F("C-ESC6", Severity.Critical, 22, "CA allows requester-supplied SAN (EDITF_ATTRIBUTESUBJECTALTNAME2 / ESC6)",
+                "With this CA policy flag any requester can put an arbitrary SAN (e.g. a domain admin UPN) into a certificate from any template.",
+                "Remove the EDITF_ATTRIBUTESUBJECTALTNAME2 flag and restart the CA.");
+            var esc11 = F("C-ESC11", Severity.High, 15, "CA does not enforce encryption for enrollment RPC (ESC11)",
+                "Without IF_ENFORCEENCRYPTICERTREQUEST the ICertPassage RPC accepts unencrypted requests and can be NTLM-relayed.",
+                "Set IF_ENFORCEENCRYPTICERTREQUEST in the CA InterfaceFlags.");
 
             foreach (var ca in cas)
             {
                 if (string.IsNullOrEmpty(ca.host)) continue;
                 ctx.Log?.Invoke("    [*] probing CA " + ca.cn + " @ " + ca.host + " ...");
 
-                // ---- ESC7: read CertSvc\Configuration\<CA>\Security from the CA host ----
+                // ---- registry on the CA host: ESC7 (roles), ESC6 (EditFlags), ESC11 (InterfaceFlags) ----
                 try
                 {
                     using (var hklm = RegistryKey.OpenRemoteBaseKey(RegistryHive.LocalMachine, ca.host, RegistryView.Registry64))
@@ -52,9 +58,26 @@ namespace ADAuditor.Checks
                             {
                                 using (var caKey = cfg.OpenSubKey(caName))
                                 {
-                                    var blob = caKey?.GetValue("Security") as byte[];
-                                    if (blob == null) continue;
-                                    InspectCaSecurity(blob, defaults, caName, esc7);
+                                    if (caKey == null) continue;
+                                    var blob = caKey.GetValue("Security") as byte[];
+                                    if (blob != null) InspectCaSecurity(blob, defaults, caName, esc7);
+
+                                    // ESC11: InterfaceFlags must contain IF_ENFORCEENCRYPTICERTREQUEST (0x200)
+                                    var ifl = caKey.GetValue("InterfaceFlags");
+                                    if (ifl is int ifv && (ifv & 0x200) == 0)
+                                        CheckUtil.AddDetail(esc11, caName + " (InterfaceFlags=0x" + ifv.ToString("X") + ")");
+
+                                    // ESC6: EDITF_ATTRIBUTESUBJECTALTNAME2 (0x40000) in a policy module EditFlags
+                                    using (var pm = caKey.OpenSubKey("PolicyModules"))
+                                    {
+                                        if (pm != null)
+                                            foreach (var mod in pm.GetSubKeyNames())
+                                                using (var mk = pm.OpenSubKey(mod))
+                                                {
+                                                    if (mk?.GetValue("EditFlags") is int ef && (ef & 0x40000) != 0)
+                                                        CheckUtil.AddDetail(esc6, caName + " (EditFlags=0x" + ef.ToString("X") + ")");
+                                                }
+                                    }
                                 }
                             }
                         }
@@ -67,8 +90,10 @@ namespace ADAuditor.Checks
                     CheckUtil.AddDetail(esc8, ca.host + " : " + detail);
             }
 
+            if (esc6.Details.Count > 0) yield return esc6;
             if (esc7.Details.Count > 0) yield return esc7;
             if (esc8.Details.Count > 0) yield return esc8;
+            if (esc11.Details.Count > 0) yield return esc11;
         }
 
         private static void InspectCaSecurity(byte[] blob, HashSet<string> defaults, string caName, Finding esc7)
