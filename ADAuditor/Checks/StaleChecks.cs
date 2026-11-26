@@ -142,12 +142,20 @@ namespace ADAuditor.Checks
                 .Why("Domain-joined computers rotate their password every 30 days; a much older one suggests an abandoned or offline-joined object.")
                 .Fix("Verify these hosts still exist; remove orphaned computer accounts.");
 
+            var pre2k = new Finding("S-Pre2kComputers", Category.StaleObjects, Severity.High, 12,
+                "Pre-created computer accounts that never logged on (PASSWD_NOTREQD)")
+                .Why("Computers pre-created with 'assign as pre-Windows 2000 computer' get the lowercase host name as password; any user can log on as them (pre2k / Timeroast).")
+                .Fix("Reset or delete these computer accounts; pre-stage computers without the pre-Windows 2000 option.");
+
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
                 "(&(objectCategory=computer)" + notDisabled + ")",
-                "sAMAccountName", "lastLogonTimestamp", "operatingSystem", "pwdLastSet")))
+                "sAMAccountName", "lastLogonTimestamp", "operatingSystem", "pwdLastSet", "userAccountControl")))
             {
                 string sam = CheckUtil.Sam(r);
                 long llt = AuditContext.Int64Of(r, "lastLogonTimestamp");
+                long cuac = AuditContext.Int64Of(r, "userAccountControl");
+                if (llt == 0 && (cuac & (long)Uac.PasswdNotReqd) != 0)
+                    CheckUtil.AddDetail(pre2k, sam);
                 int idle = CheckUtil.DaysSince(llt);
                 if (idle < 0 || idle > ComputerInactiveDays)
                     CheckUtil.AddDetail(inactiveComputers, sam + " (last logon: " + CheckUtil.FmtDate(llt) + ")");
@@ -165,6 +173,7 @@ namespace ADAuditor.Checks
             if (inactiveComputers.Details.Count > 0) yield return inactiveComputers;
             if (legacyOs.Details.Count > 0) yield return legacyOs;
             if (machinePwd.Details.Count > 0) yield return machinePwd;
+            if (pre2k.Details.Count > 0) yield return pre2k;
         }
 
         private static System.DateTime? WhenCreated(System.DirectoryServices.SearchResult r)
@@ -185,7 +194,8 @@ namespace ADAuditor.Checks
                              "2008", "server 2012" };
             foreach (var token in eol)
                 if (os.Contains(token)) return true;
-            return false;
+            // Windows 10 left support on 2025-10-14; only the LTSC 2019/2021 channels remain supported
+            return os.Contains("windows 10") && !os.Contains("ltsc");
         }
     }
 }

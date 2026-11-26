@@ -35,7 +35,8 @@ namespace ADAuditor.Checks
             var hosts = new List<string>();
             string filter = "(&(objectCategory=computer)(operatingSystem=*Server*)(!" +
                 LdapBit.HasFlag("userAccountControl", (long)Uac.AccountDisabled) + ")(!" +
-                LdapBit.HasFlag("userAccountControl", (long)Uac.ServerTrustAccount) + "))";
+                LdapBit.HasFlag("userAccountControl", (long)Uac.ServerTrustAccount) + ")(!" +
+                LdapBit.HasFlag("userAccountControl", (long)Uac.PartialSecretsAccount) + "))";
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(ctx.DefaultNamingContext, filter, "dNSHostName")))
             {
                 string h = AuditContext.Str(r, "dNSHostName");
@@ -98,11 +99,12 @@ namespace ADAuditor.Checks
                 {
                     res.Reachable = true;
                     res.SmbSigningWeak = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "RequireSecuritySignature") != 1;
-                    res.Smb1 = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "SMB1") != 0;
+                    string build = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuildNumber");
+                    res.Smb1 = Tier2HostChecks.Smb1Enabled(
+                        RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "SMB1"), build);
                     res.WDigest = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential") == 1;
                     var p = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL");
                     res.NoPpl = p == null || p == 0;
-                    string build = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuildNumber");
                     int? ubr = RegInt(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "UBR");
                     string pn = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "ProductName");
                     res.OsBuild = pn + " build " + build + (ubr != null ? "." + ubr : "");

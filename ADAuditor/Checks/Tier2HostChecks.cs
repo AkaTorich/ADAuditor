@@ -40,8 +40,8 @@ namespace ADAuditor.Checks
                 "Without channel binding, LDAPS is relayable (e.g. to AD CS / ESC8).",
                 "Set LdapEnforceChannelBinding=2 (always).");
             var esc10Kdc = F("T2-Esc10Kdc", Severity.High, 12, "Weak KDC certificate binding (ESC10)",
-                "StrongCertificateBindingEnforcement below 2 lets a certificate without strong SID binding authenticate as another user.",
-                "Set Kdc StrongCertificateBindingEnforcement=2.");
+                "StrongCertificateBindingEnforcement below 2 lets a certificate without strong SID binding authenticate as another user. DCs with the September 2025 update ignore this value and always enforce; it matters on DCs missing that update.",
+                "Install current DC updates and set Kdc StrongCertificateBindingEnforcement=2 (or remove the value).");
             var esc10Sch = F("T2-Esc10Schannel", Severity.High, 12, "Weak Schannel certificate mapping (ESC10)",
                 "CertificateMappingMethods including UPN (0x4) enables weak/forgeable certificate mapping.",
                 "Remove the 0x4 (UPN) bit from Schannel CertificateMappingMethods.");
@@ -67,12 +67,13 @@ namespace ADAuditor.Checks
                     using (hklm)
                     {
                         int? v;
+                        string build = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuildNumber");
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "RequireSecuritySignature");
                         if (v != 1) CheckUtil.AddDetail(smbSigning, host);
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "SMB1");
-                        if (v != 0) CheckUtil.AddDetail(smbv1, host + " (SMB1=" + (v?.ToString() ?? "unset") + ")");
+                        if (Smb1Enabled(v, build)) CheckUtil.AddDetail(smbv1, host + " (SMB1=" + (v?.ToString() ?? "unset") + ", build " + build + ")");
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "LmCompatibilityLevel");
                         if (v != null && v < 3) CheckUtil.AddDetail(ntlmLevel, host + " (LmCompatibilityLevel=" + v + ")");
@@ -83,8 +84,9 @@ namespace ADAuditor.Checks
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "RunAsPPL");
                         if (v == null || v == 0) CheckUtil.AddDetail(lsaPpl, host);
 
+                        // absent = default (LM hashes not stored since Vista / 2008); only an explicit 0 is weak
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\Lsa", "NoLMHash");
-                        if (v == null || v == 0) CheckUtil.AddDetail(noLmHash, host);
+                        if (v == 0) CheckUtil.AddDetail(noLmHash, host + " (NoLMHash=0)");
 
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Services\NTDS\Parameters", "LDAPServerIntegrity");
                         if (v != 2) CheckUtil.AddDetail(ldapSign, host + " (LDAPServerIntegrity=" + (v?.ToString() ?? "unset") + ")");
@@ -98,7 +100,6 @@ namespace ADAuditor.Checks
                         v = RegInt(hklm, @"SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL", "CertificateMappingMethods");
                         if (v != null && (v.Value & 0x4) != 0) CheckUtil.AddDetail(esc10Sch, host + " (CertificateMappingMethods=0x" + v.Value.ToString("X") + ")");
 
-                        string build = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuildNumber");
                         int? ubr = RegInt(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "UBR");
                         string pn = RegStr(hklm, @"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "ProductName");
                         CheckUtil.AddDetail(osBuild, host + " : " + pn + " build " + build + (ubr != null ? "." + ubr : ""));
@@ -134,6 +135,14 @@ namespace ADAuditor.Checks
 
         private static Finding F(string id, Severity sev, int pts, string title, string why, string fix)
             => new Finding(id, Category.Anomalies, sev, pts, title).Why(why).Fix(fix);
+
+        // SMB1 registry value absent: enabled by default up to Server 2016 (build 14393);
+        // from Server 2019 (build 17763) the SMB1 component is not installed by default.
+        internal static bool Smb1Enabled(int? smb1, string build)
+        {
+            if (smb1 != null) return smb1 != 0;
+            return int.TryParse(build, out var b) && b < 17763;
+        }
 
         private static int? RegInt(RegistryKey root, string subkey, string name)
         {

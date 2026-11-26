@@ -38,7 +38,9 @@ namespace ADAuditor.Core
         {
             Server = string.IsNullOrWhiteSpace(server) ? null : server.Trim();
             Credential = credential;
-            _auth = AuthenticationTypes.Secure | AuthenticationTypes.Sealing | AuthenticationTypes.ServerBind;
+            _auth = AuthenticationTypes.Secure | AuthenticationTypes.Sealing;
+            // ServerBind is only valid when the ADsPath names a server.
+            if (Server != null) _auth |= AuthenticationTypes.ServerBind;
         }
 
         private void W(string s) { Log?.Invoke(s); }

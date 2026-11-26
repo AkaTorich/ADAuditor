@@ -20,7 +20,7 @@ namespace ADAuditor.Checks
             var sidFilterOff = new Finding("T-SidFilterDisabled", Category.Trusts, Severity.High, 20,
                 "Trust without SID filtering / quarantine")
                 .Why("Without SID filtering an attacker in the trusted domain can inject SID history to impersonate privileged principals in this domain.")
-                .Fix("Enable SID filtering (quarantine) on external trusts; review forest trust SID filtering.");
+                .Fix("Enable SID filtering (quarantine) on external trusts; disable SID history on forest trusts.");
 
             var rc4Trust = new Finding("T-Rc4Trust", Category.Trusts, Severity.Low, 4,
                 "Trust still permits RC4 encryption")
@@ -28,14 +28,20 @@ namespace ADAuditor.Checks
                 .Fix("Enable AES on the trust where both sides support it.");
 
             var noSelective = new Finding("T-NoSelectiveAuth", Category.Trusts, Severity.Medium, 8,
-                "External trust without selective authentication")
+                "External/forest trust without selective authentication")
                 .Why("Without selective auth, every principal in the trusted domain is treated as Authenticated Users here, widening access.")
                 .Fix("Enable selective authentication on external/forest trusts.");
+
+            var tgtDeleg = new Finding("T-TgtDelegation", Category.Trusts, Severity.High, 12,
+                "Forest trust allows TGT delegation")
+                .Why("With TGT delegation enabled across the trust, a host with unconstrained delegation in the other forest can capture and reuse TGTs of this forest's users, including admins.")
+                .Fix("Disable TGT delegation on the trust (netdom trust /EnableTGTDelegation:No).");
 
             int count = 0;
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(sysDn,
                 "(objectClass=trustedDomain)",
-                "trustPartner", "trustDirection", "trustType", "trustAttributes", "flatName")))
+                "trustPartner", "trustDirection", "trustType", "trustAttributes", "flatName",
+                "msDS-SupportedEncryptionTypes")))
             {
                 count++;
                 string partner = AuditContext.Str(r, "trustPartner");
@@ -50,23 +56,39 @@ namespace ADAuditor.Checks
                 bool withinForest = (ta & TrustAttributes.WithinForest) != 0;
                 bool forestTransitive = (ta & TrustAttributes.ForestTransitive) != 0;
                 bool quarantined = (ta & TrustAttributes.QuarantinedDomain) != 0;
+                bool treatAsExternal = (ta & TrustAttributes.TreatAsExternal) != 0;
+                bool weTrustThem = (dir & 2) != 0;          // outbound or bidirectional
+                bool mit = type == 3;
 
-                // External (cross-domain, not intra-forest) trust should be quarantined.
-                if (!withinForest && !forestTransitive && !quarantined)
-                    CheckUtil.AddDetail(sidFilterOff, partner + " (external trust, quarantine OFF)");
+                // SID filtering protects this domain from principals of a domain it trusts.
+                if (weTrustThem && !withinForest && !mit)
+                {
+                    if (!forestTransitive && !quarantined)
+                        CheckUtil.AddDetail(sidFilterOff, partner + " (external trust, quarantine OFF)");
+                    else if (forestTransitive && treatAsExternal)
+                        CheckUtil.AddDetail(sidFilterOff, partner + " (forest trust, SID history enabled)");
+                }
 
+                // 0x80 only applies to MIT realms; Windows trusts carry msDS-SupportedEncryptionTypes.
+                int et = (int)AuditContext.Int64Of(r, "msDS-SupportedEncryptionTypes");
                 if ((ta & TrustAttributes.UsesRc4Encryption) != 0)
-                    CheckUtil.AddDetail(rc4Trust, partner);
+                    CheckUtil.AddDetail(rc4Trust, partner + " (MIT realm uses RC4)");
+                else if (et != 0 && (et & 0x18) == 0)
+                    CheckUtil.AddDetail(rc4Trust, partner + " (supported etypes=0x" + et.ToString("X") + ", no AES)");
 
-                // External (non-intra-forest) trust without selective authentication
-                if (!withinForest && (ta & TrustAttributes.CrossOrganization) == 0)
+                // Selective authentication restricts who from the trusted domain may log on here.
+                if (weTrustThem && !withinForest && !mit && (ta & TrustAttributes.CrossOrganization) == 0)
                     CheckUtil.AddDetail(noSelective, partner);
+
+                if (forestTransitive && (ta & TrustAttributes.CrossOrgEnableTgtDelegation) != 0)
+                    CheckUtil.AddDetail(tgtDeleg, partner);
             }
 
             if (count > 0) yield return inventory;
             if (sidFilterOff.Details.Count > 0) yield return sidFilterOff;
             if (rc4Trust.Details.Count > 0) yield return rc4Trust;
             if (noSelective.Details.Count > 0) yield return noSelective;
+            if (tgtDeleg.Details.Count > 0) yield return tgtDeleg;
 
             // ---- trust account (DOMAIN$) password age ----
             var trustPwd = new Finding("T-TrustPasswordAge", Category.Trusts, Severity.Medium, 8,

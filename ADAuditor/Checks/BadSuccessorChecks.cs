@@ -78,7 +78,7 @@ namespace ADAuditor.Checks
 
                 foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;

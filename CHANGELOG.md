@@ -4,6 +4,78 @@ All notable changes to **AD_AUDITOR** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/) and the project
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-11-26
+
+### Added
+- **dMSA / BadSuccessor** module (`M-BadSuccessor`, `M-DmsaPrecededBy`) for Windows Server 2025
+  schemas. *(shipped in source after 1.3.0, first released here)*
+- **AD CS host checks ESC6, ESC10 and ESC11** (`C-ESC6`, `T2-Esc10Kdc`, `T2-Esc10Schannel`,
+  `C-ESC11`), DC LM-hash storage (`T2-NoLMHash`) and nonsecure DNS dynamic updates
+  (`E-DnsInsecureUpdate`). *(shipped in source after 1.3.0, first released here)*
+- Connection-field tooltips shown on focus. *(shipped in source after 1.3.0)*
+- `X-AclGenericWrite` - non-admins with write access to all attributes of accounts/groups, and a
+  matching `GenericWrite` edge in the attack-path graph.
+- `P-NotProtectedUsers` - enabled admin accounts outside the Protected Users group.
+- `S-Pre2kComputers` - pre-created (pre-Windows 2000) computer accounts that never logged on.
+- `T-TgtDelegation` - forest trusts that allow TGT delegation.
+- `V-PrivilegeRights` - GPOs granting SeDebug/SeBackup/SeRestore/SeLoadDriver/SeImpersonate/
+  SeEnableDelegation and similar rights to Everyone / Authenticated Users / Domain Users.
+- `V-GpoFolderWritable` - GPO folders in SYSVOL writable by non-admins.
+- **JSON export** (findings, scores and attack graph) next to HTML/CSV.
+- Version shown in the title bar; project version set to 1.4.0.
+
+### Fixed
+- **Inherit-only ACEs are no longer treated as rights on the object.** All ACL-based rules and
+  the Tier 3 graph counted ACEs that only propagate to children (e.g. an OU delegation for user
+  objects stamped onto groups, or Microsoft's PrivExchange mitigation which makes the Exchange
+  `WriteDacl` ACE inherit-only) - a major source of false positives.
+- AD CS: ESC2 was only reported when the template also had an enrollee-supplied subject and
+  never when it lacked an EKU; it now follows the Any-Purpose / no-EKU definition. ESC9 now
+  requires a client-authentication EKU. Templates not published on any CA are skipped. The
+  ESC1 graph edge now starts at the principals that can actually enroll instead of always
+  Authenticated Users.
+- Privileged group inventory (`P-DomainAdmins` etc.) was shown as HIGH even when membership was
+  within the expected size and scored 0 points; it is now INFO in that case.
+- Broad-principal detection (`P-BroadInPriv`, `A-PreWin2000`) matched SIDs by substring; it now
+  matches the exact foreign-security-principal object.
+- `P-AdminsDelegatable` included disabled accounts and krbtgt; `A-Unconstrained`,
+  `A-AsrepRoast` and the graph's unconstrained edges included disabled accounts.
+- Logon/startup scripts were never found: `scripts.ini` keys are numbered (`0CmdLine=`).
+- `V-GppPassword` missed files that contained one empty and one real `cpassword`.
+- SYSVOL is now read through the server/IP given in the UI, so it works when DNS does not
+  resolve the domain.
+- LAPS: readers and coverage only looked at legacy LAPS when both legacy and Windows LAPS
+  schemas were present; coverage also listed read-only DCs.
+- Trusts: `T-Rc4Trust` relied on a flag that only applies to MIT realms - it now reads the
+  trust's supported encryption types. SID-filtering and selective-authentication checks now
+  only apply to trusts where this domain trusts the partner, ignore MIT realms, and also flag
+  forest trusts with SID history enabled.
+- Host checks: SMBv1 was reported on every modern server where the `SMB1` value is simply
+  absent (SMB1 is not installed by default from Server 2019); `T2-NoLMHash` was reported when
+  the value is absent although LM hashes are not stored by default. ESC10 text now notes that
+  DCs with the September 2025 update always enforce strong certificate binding.
+- Read-only DCs were missing from DC host checks although the code claimed to include them,
+  and were probed as member servers instead.
+- Password policy history was flagged below 12 while recommending 24; the threshold is now 24.
+- Domain functional level 10 is shown as Windows Server 2025; Windows 10 outside LTSC is
+  reported as end-of-life (support ended 2025-10-14).
+- DNS nonsecure-update flag read 4 bytes instead of the 1-byte value; ForestDnsZones zones were
+  not scanned.
+- LDAP connections leaked: the search root of every query was never disposed.
+- `ServerBind` is no longer passed for serverless binds.
+- CSV export neutralises leading `= + - @` to prevent spreadsheet formula injection from
+  directory data.
+- CSV/JSON/Graph buttons stayed enabled while a new audit was running.
+- Lab scripts: `Seed-LabVulns.ps1` used a `testuser` account it never created, hard-coded
+  `lab.local`, and its `-Cleanup` did not revoke the ACEs, template write or Pre-Windows 2000
+  change it made; `$pwd` shadowed the automatic `$PWD`. `Harden-Lab.ps1` now also covers
+  ForestDnsZones and warns that removing ADIDNS create rights stops DNS self-registration.
+
+### Changed
+- README (EN/RU): real rule count (128 instead of "~110"), the full ESC list, which checks use
+  the typed credentials and which use the Windows session, which host checks run on DCs vs
+  member servers, and a project layout section.
+
 ## [1.3.0] - 2026-05-21
 
 ### Added

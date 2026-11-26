@@ -53,14 +53,14 @@ namespace ADAuditor.Checks
                 string gdn = ResolveDnBySid(ctx, g.sid);
                 if (gdn == null) continue;
 
-                int count = 0;
+                var names = new List<string>();
                 string memberBase = DomainNcOf(gdn);
                 foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(memberBase,
                     "(&(|(objectClass=user)(objectClass=computer))(memberOf:" + InChain + ":=" + Escape(gdn) + "))",
                     "sAMAccountName", "userAccountControl", "servicePrincipalName", "objectClass")))
                 {
-                    count++;
                     string sam = CheckUtil.Sam(r);
+                    names.Add(sam);
                     long uac = AuditContext.Int64Of(r, "userAccountControl");
                     bool isUser = ContainsClass(r, "user") && !ContainsClass(r, "computer");
 
@@ -72,16 +72,14 @@ namespace ADAuditor.Checks
                         CheckUtil.AddDetail(disabledPriv, sam + " in " + ShortName(gdn));
                 }
 
-                var sev = g.sid.EndsWith("-518") && count > 0 ? Severity.Medium : g.sev;
-                var f = new Finding(g.id, Category.PrivilegedAccounts, sev,
-                    count > g.warnCount ? g.pts : 0, g.title + ": " + count)
+                // membership within the expected size is inventory, not a weakness
+                bool tooMany = names.Count > g.warnCount;
+                var f = new Finding(g.id, Category.PrivilegedAccounts, tooMany ? g.sev : Severity.Info,
+                    tooMany ? g.pts : 0, g.title + ": " + names.Count +
+                    (tooMany ? " (expected at most " + g.warnCount + ")" : ""))
                     .Why("Every member of this group is effectively a path to domain compromise; keep it minimal.")
                     .Fix("Reduce membership to the bare minimum and review each member.");
-                // re-enumerate names (cheap) for listing
-                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(memberBase,
-                    "(&(|(objectClass=user)(objectClass=computer))(memberOf:" + InChain + ":=" + Escape(gdn) + "))",
-                    "sAMAccountName")))
-                    CheckUtil.AddDetail(f, CheckUtil.Sam(r));
+                foreach (var n in names) CheckUtil.AddDetail(f, n);
                 yield return f;
             }
 
@@ -183,11 +181,26 @@ namespace ADAuditor.Checks
                 "Privileged accounts not marked sensitive / cannot-be-delegated")
                 .Why("Without NOT_DELEGATED (or Protected Users membership) an admin's TGT can be captured via delegation and replayed.")
                 .Fix("Set 'Account is sensitive and cannot be delegated' on admins and add them to Protected Users.");
+            string enabledAdmins = "(&(objectCategory=person)(objectClass=user)(adminCount=1)(!(sAMAccountName=krbtgt))(!" +
+                LdapBit.HasFlag("userAccountControl", (long)Uac.AccountDisabled) + ")";
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
-                "(&(objectCategory=person)(objectClass=user)(adminCount=1)(!" +
-                LdapBit.HasFlag("userAccountControl", (long)Uac.NotDelegated) + "))", "sAMAccountName")))
+                enabledAdmins + "(!" + LdapBit.HasFlag("userAccountControl", (long)Uac.NotDelegated) + "))", "sAMAccountName")))
                 CheckUtil.AddDetail(deleg, CheckUtil.Sam(r));
             if (deleg.Details.Count > 0) yield return deleg;
+
+            // ---- privileged accounts outside Protected Users (RID 525) ----
+            string puDn = string.IsNullOrEmpty(domSid) ? null : ResolveDnBySid(ctx, domSid + "-525");
+            if (puDn != null)
+            {
+                var notProtected = new Finding("P-NotProtectedUsers", Category.PrivilegedAccounts, Severity.Medium, 6,
+                    "Privileged accounts not in Protected Users")
+                    .Why("Protected Users blocks NTLM, RC4/DES, delegation and credential caching for its members, removing the most common ways admin credentials are stolen.")
+                    .Fix("Add tier-0 admin accounts (not service accounts) to Protected Users after testing.");
+                foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
+                    enabledAdmins + "(!(memberOf:" + InChain + ":=" + Escape(puDn) + ")))", "sAMAccountName")))
+                    CheckUtil.AddDetail(notProtected, CheckUtil.Sam(r));
+                if (notProtected.Details.Count > 0) yield return notProtected;
+            }
 
             // ---- broad principals as direct members of privileged groups ----
             var broad = new Finding("P-BroadInPriv", Category.PrivilegedAccounts, Severity.Critical, 25,
@@ -215,8 +228,8 @@ namespace ADAuditor.Checks
                             if (dcDn != null && string.Equals(md, dcDn, StringComparison.OrdinalIgnoreCase))
                                 CheckUtil.AddDetail(broad, "Domain Computers in " + ShortName(gdn));
                             foreach (var w in wellKnown)
-                                if (md.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0)
-                                    CheckUtil.AddDetail(broad, w + " in " + ShortName(gdn));
+                                if (CheckUtil.IsFsp(md, w))
+                                    CheckUtil.AddDetail(broad, CheckUtil.TranslateSid(w) + " in " + ShortName(gdn));
                         }
                     }
                 }
@@ -229,7 +242,7 @@ namespace ADAuditor.Checks
                 "Accounts with a privileged primaryGroupID")
                 .Why("Setting primaryGroupID to a privileged RID grants membership without appearing in the group's member list - a stealthy backdoor.")
                 .Fix("Reset primaryGroupID to 513 (Domain Users) and investigate how it was changed.");
-            // 512 DA, 518 SA, 519 EA, 520 Group Policy Creator Owners, 521 RODC
+            // 512 DA, 518 SA, 519 EA, 520 Group Policy Creator Owners
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
                 "(&(objectCategory=person)(objectClass=user)(|(primaryGroupID=512)(primaryGroupID=518)(primaryGroupID=519)(primaryGroupID=520)))",
                 "sAMAccountName", "primaryGroupID")))

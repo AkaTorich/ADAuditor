@@ -46,7 +46,7 @@ namespace ADAuditor.Checks
                     foreach (ActiveDirectoryAccessRule rule in
                              dom.ObjectSecurity.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                     {
-                        if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                        if (!CheckUtil.Applies(rule)) continue;
                         string sid = rule.IdentityReference.Value;
                         if (defaults.Contains(sid)) continue;
 
@@ -92,7 +92,7 @@ namespace ADAuditor.Checks
                     foreach (ActiveDirectoryAccessRule rule in
                              sdh.ObjectSecurity.GetAccessRules(true, false, typeof(SecurityIdentifier)))
                     {
-                        if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                        if (!CheckUtil.Applies(rule)) continue;
                         string sid = rule.IdentityReference.Value;
                         if (defaults.Contains(sid)) continue;
 

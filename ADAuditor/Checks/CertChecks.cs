@@ -6,7 +6,7 @@ using ADAuditor.Core;
 
 namespace ADAuditor.Checks
 {
-    // AD CS (PKI) misconfigurations - notably the ESC1 template pattern.
+    // AD CS (PKI) misconfigurations visible in LDAP: ESC1-ESC5, ESC9, ESC13, ESC15.
     public sealed class CertChecks : ICheck
     {
         public string Name => "AD CS / PKI";
@@ -27,17 +27,21 @@ namespace ADAuditor.Checks
             // Enrollment Services = configured CAs
             var caInv = new Finding("C-CAs", Category.Anomalies, Severity.Info, 0,
                 "Certificate Authorities (Enrollment Services)")
-                .Why("AD CS expands the attack surface; ESC1-ESC8 abuse certificates to impersonate any account.")
+                .Why("AD CS expands the attack surface; the ESC1-ESC15 techniques abuse certificates to impersonate any account.")
                 .Fix("Harden CA, audit template permissions, enable strong certificate mapping.");
             bool hasCa = false;
+            // templates an Enterprise CA actually issues; unpublished ones cannot be requested
+            var published = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             try
             {
                 foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
                     "CN=Enrollment Services," + pkiBase, "(objectClass=pKIEnrollmentService)",
-                    "cn", "dNSHostName")))
+                    "cn", "dNSHostName", "certificateTemplates")))
                 {
                     hasCa = true;
                     CheckUtil.AddDetail(caInv, AuditContext.Str(r, "cn") + " @ " + AuditContext.Str(r, "dNSHostName"));
+                    if (r.Properties.Contains("certificateTemplates"))
+                        foreach (var t in r.Properties["certificateTemplates"]) published.Add(t?.ToString() ?? "");
                 }
             }
             catch { }
@@ -51,9 +55,9 @@ namespace ADAuditor.Checks
                 .Fix("Disable ENROLLEE_SUPPLIES_SUBJECT, require manager approval, or restrict enrollment rights.");
 
             var noApproval = new Finding("C-Esc2AnyPurpose", Category.Anomalies, Severity.High, 15,
-                "Templates with Any-Purpose / no EKU and enrollee-supplied subject (ESC2)")
-                .Why("An Any-Purpose or SubCA certificate can be used for client authentication and more.")
-                .Fix("Constrain EKUs and the subject name source.");
+                "Templates with Any-Purpose or no EKU (ESC2)")
+                .Why("An Any-Purpose or no-EKU (SubCA-like) certificate can be used for client authentication and as an enrollment agent to request certificates on behalf of other users.")
+                .Fix("Constrain EKUs, require manager approval, or restrict enrollment rights.");
 
             var esc3 = new Finding("C-ESC3", Category.Anomalies, Severity.High, 15,
                 "Enrollment Agent templates without manager approval (ESC3)")
@@ -62,7 +66,7 @@ namespace ADAuditor.Checks
 
             var esc9 = new Finding("C-ESC9", Category.Anomalies, Severity.Medium, 10,
                 "Templates with no security extension (ESC9)")
-                .Why("CT_FLAG_NO_SECURITY_EXTENSION omits the SID binding, enabling certificate-mapping abuse when combined with altSecurityIdentities control.")
+                .Why("CT_FLAG_NO_SECURITY_EXTENSION omits the SID binding from a client-auth certificate; with write access to a victim's UPN this enables impersonation where DCs are not in full certificate-binding enforcement.")
                 .Fix("Remove the no-security-extension flag and enforce strong certificate mapping.");
 
             var esc15 = new Finding("C-ESC15", Category.Anomalies, Severity.High, 15,
@@ -85,10 +89,12 @@ namespace ADAuditor.Checks
                 bool suppliesSubject = (nameFlag & EnrolleeSuppliesSubject) != 0;
                 bool managerApproval = (enrollFlag & PendAllRequests) != 0;
                 bool needsRaSig = raSig > 0;
+                bool issuable = !managerApproval && !needsRaSig;
 
-                // Only exploitable if a non-privileged principal can actually enroll.
-                bool lowPrivEnroll = LowPrivCanEnroll(CheckUtil.Bytes(r, "nTSecurityDescriptor"), defaults);
-                if (!lowPrivEnroll) continue;
+                // Only exploitable if the template is published and a non-privileged principal can enroll.
+                if (published.Count > 0 && !published.Contains(cn)) continue;
+                var enrollers = LowPrivEnrollers(CheckUtil.Bytes(r, "nTSecurityDescriptor"), defaults);
+                if (enrollers.Count == 0 || !issuable) continue;
 
                 var ekus = new List<string>();
                 if (r.Properties.Contains("pKIExtendedKeyUsage"))
@@ -96,36 +102,38 @@ namespace ADAuditor.Checks
                 if (r.Properties.Contains("msPKI-Certificate-Application-Policy"))
                     foreach (var v in r.Properties["msPKI-Certificate-Application-Policy"]) ekus.Add(v.ToString());
 
-                // ESC9: missing security extension (independent of subject source)
-                if ((enrollFlag & NoSecurityExtension) != 0)
-                    CheckUtil.AddDetail(esc9, cn);
-
-                // ESC3: enrollment agent EKU without approval
-                if (ekus.Contains(EkuEnrollmentAgent) && !managerApproval && !needsRaSig)
-                    CheckUtil.AddDetail(esc3, cn);
-
-                // ESC15: v1 schema template with enrollee-supplied subject
-                if (schemaVer <= 1 && suppliesSubject && !managerApproval)
-                    CheckUtil.AddDetail(esc15, cn + " (schema v" + schemaVer + ")");
-
-                // ESC1 / ESC2 require enrollee-supplied subject, no approval, no RA signature
-                if (!suppliesSubject || managerApproval || needsRaSig) continue;
-
-                bool clientAuth = ekus.Count == 0 ||
+                bool anyPurpose = ekus.Count == 0 || ekus.Contains("2.5.29.37.0");
+                bool clientAuth = anyPurpose ||
                     ekus.Contains("1.3.6.1.5.5.7.3.2") ||   // Client Authentication
                     ekus.Contains("1.3.6.1.5.2.3.4") ||     // PKINIT Client Authentication
                     ekus.Contains("1.3.6.1.4.1.311.20.2.2");// Smart Card Logon
-                bool anyPurpose = ekus.Count == 0 || ekus.Contains("2.5.29.37.0");
+                string who = " [enroll: " + string.Join(", ", enrollers.ConvertAll(CheckUtil.TranslateSid)) + "]";
 
-                if (clientAuth)
+                // ESC9: client-auth certificate without the SID security extension
+                if ((enrollFlag & NoSecurityExtension) != 0 && clientAuth)
+                    CheckUtil.AddDetail(esc9, cn + who);
+
+                // ESC3: enrollment agent EKU
+                if (ekus.Contains(EkuEnrollmentAgent))
+                    CheckUtil.AddDetail(esc3, cn + who);
+
+                // ESC15: v1 schema template with enrollee-supplied subject
+                if (schemaVer <= 1 && suppliesSubject)
+                    CheckUtil.AddDetail(esc15, cn + " (schema v" + schemaVer + ")" + who);
+
+                // ESC2: any-purpose / no EKU, regardless of the subject source
+                if (anyPurpose)
+                    CheckUtil.AddDetail(noApproval, cn + (ekus.Count == 0 ? " (no EKU)" : " (Any-Purpose)") + who);
+
+                // ESC1: enrollee-supplied subject + client authentication
+                if (suppliesSubject && clientAuth)
                 {
-                    CheckUtil.AddDetail(esc1, cn + " (enrollee-supplied subject + client-auth, no approval)");
-                    // graph vector: any low-priv user can request a cert as a DA -> domain
+                    CheckUtil.AddDetail(esc1, cn + " (enrollee-supplied subject + client-auth, no approval)" + who);
+                    // graph vector: each low-priv enroller can request a cert as a DA -> domain
                     if (!string.IsNullOrEmpty(domSid))
-                        ctx.VectorEdges.Add(new GraphEdge { From = "S-1-5-11", To = domSid, Type = "ADCS-ESC1" });
+                        foreach (var e in enrollers)
+                            ctx.VectorEdges.Add(new GraphEdge { From = e, To = domSid, Type = "ADCS-ESC1" });
                 }
-                else if (anyPurpose)
-                    CheckUtil.AddDetail(noApproval, cn + " (Any-Purpose, no approval)");
             }
 
             if (esc1.Details.Count > 0) yield return esc1;
@@ -165,24 +173,26 @@ namespace ADAuditor.Checks
             if (esc13.Details.Count > 0) yield return esc13;
         }
 
-        // True if a non-default principal can enroll (Enroll/AutoEnroll extended right
-        // or full control) - i.e. the template is actually requestable by low-priv users.
-        private static bool LowPrivCanEnroll(byte[] sdb, HashSet<string> defaults)
+        // Non-default principals that can enroll (Enroll/AutoEnroll extended right or full
+        // control) - i.e. who can actually request this template.
+        private static List<string> LowPrivEnrollers(byte[] sdb, HashSet<string> defaults)
         {
-            if (sdb == null) return false;
+            var list = new List<string>();
+            if (sdb == null) return list;
             ActiveDirectorySecurity sd;
-            try { sd = CheckUtil.ParseSd(sdb); } catch { return false; }
+            try { sd = CheckUtil.ParseSd(sdb); } catch { return list; }
             foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
             {
-                if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
-                if (defaults.Contains(rule.IdentityReference.Value)) continue;
+                if (!CheckUtil.Applies(rule)) continue;
+                string sid = rule.IdentityReference.Value;
+                if (defaults.Contains(sid) || list.Contains(sid)) continue;
                 var rights = rule.ActiveDirectoryRights;
-                if (CheckUtil.FullControl(rights)) return true;
-                if ((rights & ActiveDirectoryRights.ExtendedRight) != 0 &&
-                    (rule.ObjectType == Guid.Empty || rule.ObjectType == Enroll || rule.ObjectType == AutoEnroll))
-                    return true;
+                if (CheckUtil.FullControl(rights) ||
+                    ((rights & ActiveDirectoryRights.ExtendedRight) != 0 &&
+                     (rule.ObjectType == Guid.Empty || rule.ObjectType == Enroll || rule.ObjectType == AutoEnroll)))
+                    list.Add(sid);
             }
-            return false;
+            return list;
         }
 
         // Flag non-default principals with object-control rights over PKI objects.
@@ -202,7 +212,7 @@ namespace ADAuditor.Checks
                 foreach (System.DirectoryServices.ActiveDirectoryAccessRule rule in
                          sd.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;

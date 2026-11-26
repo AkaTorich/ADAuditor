@@ -35,10 +35,12 @@ namespace ADAuditor.Report
                 Q(f.Rationale), Q(f.Recommendation));
         }
 
-        // RFC 4180 field quoting.
+        // RFC 4180 field quoting. Directory data (e.g. descriptions) is attacker-controlled, so a
+        // leading = + - @ is neutralised to stop spreadsheet formula injection.
         private static string Q(string s)
         {
             if (string.IsNullOrEmpty(s)) return "";
+            if ("=+-@\t\r".IndexOf(s[0]) >= 0) s = "'" + s;
             bool needs = s.IndexOf(',') >= 0 || s.IndexOf('"') >= 0 || s.IndexOf('\n') >= 0 || s.IndexOf('\r') >= 0;
             s = s.Replace("\"", "\"\"");
             return needs ? "\"" + s + "\"" : s;

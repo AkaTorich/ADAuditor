@@ -30,7 +30,13 @@ namespace ADAuditor.Checks
             var defaults = CheckUtil.DefaultPrivSids(domSid);
 
             Guid? keyCred = CheckUtil.SchemaGuid(ctx, "msDS-KeyCredentialLink");
-            Guid? laps = CheckUtil.SchemaGuid(ctx, "ms-Mcs-AdmPwd") ?? CheckUtil.SchemaGuid(ctx, "msLAPS-Password");
+            // legacy LAPS and Windows LAPS can coexist; any of these confidential attributes counts
+            var laps = new HashSet<Guid>();
+            foreach (var a in new[] { "ms-Mcs-AdmPwd", "msLAPS-Password", "msLAPS-EncryptedPassword" })
+            {
+                var g = CheckUtil.SchemaGuid(ctx, a);
+                if (g != null) laps.Add(g.Value);
+            }
 
             var genericAll = Mk("X-AclGenericAll", Severity.High, 14, "Non-admins with Full Control (GenericAll) over accounts/groups",
                 "GenericAll lets the principal reset passwords, add members, or take over the object completely.",
@@ -38,6 +44,9 @@ namespace ADAuditor.Checks
             var writeDaclOwner = Mk("X-AclWriteDaclOwner", Severity.High, 14, "Non-admins can rewrite DACL / take ownership",
                 "WriteDacl or WriteOwner is equivalent to full control - the principal can grant itself anything.",
                 "Remove WriteDacl/WriteOwner from non-admin principals.");
+            var genericWrite = Mk("X-AclGenericWrite", Severity.High, 12, "Non-admins can write all properties (GenericWrite) of accounts/groups",
+                "Write access to every attribute lets the principal set an SPN (targeted Kerberoast), add Shadow Credentials, change logon scripts, or add group members.",
+                "Replace GenericWrite with the narrow attribute rights that are actually needed.");
             var forceChange = Mk("X-AclForceChangePwd", Severity.High, 12, "Non-admins can force-reset account passwords",
                 "The User-Force-Change-Password right lets the principal set a new password without knowing the old one.",
                 "Remove this extended right from non-admins.");
@@ -70,23 +79,26 @@ namespace ADAuditor.Checks
 
                 foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
 
                     var rights = rule.ActiveDirectoryRights;
                     var ot = rule.ObjectType;
 
-                    if ((rights & Full) == Full)
+                    bool full = (rights & Full) == Full;
+                    if (full)
                         CheckUtil.AddDetail(genericAll, Who(sid) + " -> " + name);
                     if ((rights & WriteDacl) != 0 || (rights & WriteOwner) != 0)
                         CheckUtil.AddDetail(writeDaclOwner, Who(sid) + " -> " + name);
+                    if (!full && (rights & WriteProp) != 0 && ot == Guid.Empty)
+                        CheckUtil.AddDetail(genericWrite, Who(sid) + " -> " + name);
 
                     if ((rights & ExtRight) != 0)
                     {
                         if (ot == Guid.Empty) CheckUtil.AddDetail(allExt, Who(sid) + " -> " + name);
                         else if (ot == ForceChangePwd) CheckUtil.AddDetail(forceChange, Who(sid) + " -> " + name);
-                        else if (laps != null && ot == laps.Value) CheckUtil.AddDetail(lapsRead, Who(sid) + " -> " + name);
+                        else if (laps.Contains(ot)) CheckUtil.AddDetail(lapsRead, Who(sid) + " -> " + name);
                     }
 
                     if (((rights & WriteProp) != 0 || (rights & Self) != 0) && isGroup &&
@@ -97,13 +109,14 @@ namespace ADAuditor.Checks
                         CheckUtil.AddDetail(shadowWrite, Who(sid) + " -> " + name);
 
                     // GenericAll implicitly grants LAPS read too
-                    if (laps != null && (rights & Full) == Full && CheckUtil.HasClass(r, "computer"))
+                    if (laps.Count > 0 && full && CheckUtil.HasClass(r, "computer"))
                         CheckUtil.AddDetail(lapsRead, Who(sid) + " -> " + name + " (via GenericAll)");
                 }
             }
 
             if (genericAll.Details.Count > 0) yield return genericAll;
             if (writeDaclOwner.Details.Count > 0) yield return writeDaclOwner;
+            if (genericWrite.Details.Count > 0) yield return genericWrite;
             if (forceChange.Details.Count > 0) yield return forceChange;
             if (writeMember.Details.Count > 0) yield return writeMember;
             if (shadowWrite.Details.Count > 0) yield return shadowWrite;
@@ -129,7 +142,7 @@ namespace ADAuditor.Checks
                 string dn = CheckUtil.Dn(r);
                 foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
                     var rights = rule.ActiveDirectoryRights;
@@ -158,7 +171,7 @@ namespace ADAuditor.Checks
                 string name = CheckUtil.Sam(r);
                 foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string sid = rule.IdentityReference.Value;
                     if (defaults.Contains(sid)) continue;
                     CheckUtil.AddDetail(gmsaRead, Who(sid) + " -> " + name);

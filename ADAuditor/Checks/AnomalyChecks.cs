@@ -32,7 +32,7 @@ namespace ADAuditor.Checks
                 if ((pp & PwdProperties.Complex) == 0) { CheckUtil.AddDetail(pol, "password complexity DISABLED"); pts += 8; }
                 if (lockout == 0) { CheckUtil.AddDetail(pol, "account lockout DISABLED (threshold = 0)"); pts += 8; }
                 if (CheckUtil.IntervalToDays(maxAge) == 0) { CheckUtil.AddDetail(pol, "maxPwdAge = never expires"); pts += 4; }
-                if (history < 12) { CheckUtil.AddDetail(pol, "pwdHistoryLength = " + history + " (recommend >= 24)"); pts += 4; }
+                if (history < 24) { CheckUtil.AddDetail(pol, "pwdHistoryLength = " + history + " (recommend >= 24)"); pts += 4; }
                 pol.Points = pts;
                 if (pol.Details.Count > 0) yield return pol;
 
@@ -56,7 +56,7 @@ namespace ADAuditor.Checks
             if (ctx.DomainFunctionality < 7)
                 yield return new Finding("A-FunctionalLevel", Category.Anomalies, Severity.Low, 4,
                     "Domain functional level is " + FlName(ctx.DomainFunctionality))
-                    .Why("Older functional levels lack modern protections (e.g. PKINIT/Kerberos hardening, gMSA, claims).")
+                    .Why("Older functional levels lack modern protections (e.g. DC-side Protected Users restrictions, authentication policies and silos, Kerberos armoring).")
                     .Fix("Raise the functional level once all DCs are upgraded.")
                     .Detail("domainFunctionality = " + ctx.DomainFunctionality);
 
@@ -101,8 +101,9 @@ namespace ADAuditor.Checks
                     .Detail("No LAPS schema attributes found.");
             else
             {
-                // LAPS schema exists - find enabled, non-DC computers with no LAPS expiration set.
-                string expAttr = lapsLegacy ? "ms-Mcs-AdmPwdExpirationTime" : "msLAPS-PasswordExpirationTime";
+                // LAPS schema exists - find enabled, non-DC computers managed by neither LAPS flavour.
+                string noLaps = (lapsLegacy ? "(!(ms-Mcs-AdmPwdExpirationTime=*))" : "") +
+                                (lapsNew ? "(!(msLAPS-PasswordExpirationTime=*))" : "");
                 var lapsCoverage = new Finding("A-LapsCoverage", Category.Anomalies, Severity.Medium, 8,
                     "Computers not covered by LAPS")
                     .Why("Hosts without a managed local admin password keep static/shared credentials - a primary lateral-movement vector.")
@@ -110,7 +111,8 @@ namespace ADAuditor.Checks
                 foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
                     "(&(objectCategory=computer)(!" + LdapBit.HasFlag("userAccountControl", (long)Uac.AccountDisabled) +
                     ")(!" + LdapBit.HasFlag("userAccountControl", (long)Uac.ServerTrustAccount) +
-                    ")(!(" + expAttr + "=*)))",
+                    ")(!" + LdapBit.HasFlag("userAccountControl", (long)Uac.PartialSecretsAccount) +
+                    ")" + noLaps + ")",
                     "sAMAccountName")))
                     CheckUtil.AddDetail(lapsCoverage, CheckUtil.Sam(r));
                 if (lapsCoverage.Details.Count > 0) yield return lapsCoverage;
@@ -265,17 +267,14 @@ namespace ADAuditor.Checks
                     foreach (var m in grp.Properties["member"])
                     {
                         string md = m?.ToString() ?? "";
-                        if (md.IndexOf("S-1-1-0", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            md.IndexOf("S-1-5-7", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            md.IndexOf("Everyone", System.StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            md.IndexOf("Anonymous", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                        if (CheckUtil.IsFsp(md, "S-1-1-0") || CheckUtil.IsFsp(md, "S-1-5-7"))
                         {
                             if (preWin == null)
                                 preWin = new Finding("A-PreWin2000", Category.Anomalies, Severity.High, 12,
                                     "Anonymous/Everyone in 'Pre-Windows 2000 Compatible Access'")
                                     .Why("This grants broad read access to the directory to anonymous or all users.")
                                     .Fix("Remove Anonymous Logon / Everyone from this group.");
-                            preWin.Detail(md);
+                            preWin.Detail(CheckUtil.TranslateSid(md.Substring(3, md.IndexOf(',') - 3)) + " (" + md + ")");
                         }
                     }
                 }
@@ -346,6 +345,7 @@ namespace ADAuditor.Checks
                 case 5: return "Windows Server 2012";
                 case 6: return "Windows Server 2012 R2";
                 case 7: return "Windows Server 2016";
+                case 10: return "Windows Server 2025";
                 default: return "level " + fl;
             }
         }

@@ -31,7 +31,7 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
                         <TextBlock Text="&#9608; AD_AUDITOR" FontWeight="Bold" FontSize="13"
                                    Foreground="{StaticResource GreenBrush}" />
-                        <TextBlock Text="  ::  active directory recon suite" FontSize="12"
+                        <TextBlock x:Name="TxtCaption" Text="  ::  active directory recon suite" FontSize="12"
                                    Foreground="{StaticResource DimGreenBrush}" VerticalAlignment="Center" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -82,6 +82,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Text="DC/DOMAIN&gt; " VerticalAlignment="Center" />
@@ -114,7 +115,9 @@
                         Click="BtnExport_Click" IsEnabled="False" />
                 <Button x:Name="BtnExportCsv" Grid.Column="11" Content="[ CSV ]" Margin="0,0,6,0"
                         Click="BtnExportCsv_Click" IsEnabled="False" />
-                <Button x:Name="BtnGraph" Grid.Column="12" Content="[ GRAPH ]"
+                <Button x:Name="BtnExportJson" Grid.Column="12" Content="[ JSON ]" Margin="0,0,6,0"
+                        Click="BtnExportJson_Click" IsEnabled="False" />
+                <Button x:Name="BtnGraph" Grid.Column="13" Content="[ GRAPH ]"
                         Click="BtnGraph_Click" IsEnabled="False" />
             </Grid>
         </Border>

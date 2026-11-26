@@ -22,6 +22,7 @@ namespace ADAuditor
             InitializeComponent();
             GridFindings.ItemsSource = _rows;
             WinChrome.HookMaxFix(this);
+            TxtCaption.Text += "  v" + typeof(MainWindow).Assembly.GetName().Version.ToString(3);
         }
 
         private void BtnMin_Click(object sender, RoutedEventArgs e)
@@ -62,6 +63,9 @@ namespace ADAuditor
         {
             BtnRun.IsEnabled = false;
             BtnExport.IsEnabled = false;
+            BtnExportCsv.IsEnabled = false;
+            BtnExportJson.IsEnabled = false;
+            BtnGraph.IsEnabled = false;
             _rows.Clear();
             ScorePanel.Items.Clear();
             TxtLog.Clear();
@@ -97,6 +101,7 @@ namespace ADAuditor
                 PopulateResults(report);
                 BtnExport.IsEnabled = true;
                 BtnExportCsv.IsEnabled = true;
+                BtnExportJson.IsEnabled = true;
                 BtnGraph.IsEnabled = report.AttackGraph != null && report.AttackGraph.Nodes.Count > 0;
                 SetStatus("done. " + report.Findings.Count + " findings, global score " + report.GlobalScore() + "/100.");
             }
@@ -213,6 +218,27 @@ namespace ADAuditor
                 // UTF-8 with BOM so Excel reads non-ASCII correctly.
                 System.IO.File.WriteAllText(dlg.FileName, CsvReportWriter.Build(_report), new System.Text.UTF8Encoding(true));
                 SetStatus("CSV written: " + dlg.FileName);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Export failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnExportJson_Click(object sender, RoutedEventArgs e)
+        {
+            if (_report == null) return;
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                FileName = "ADAudit_" + (_report.DomainName ?? "domain") + "_" +
+                           DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".json",
+                Filter = "JSON (*.json)|*.json"
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                System.IO.File.WriteAllText(dlg.FileName, JsonReportWriter.Build(_report), new System.Text.UTF8Encoding(false));
+                SetStatus("JSON written: " + dlg.FileName);
             }
             catch (Exception ex)
             {

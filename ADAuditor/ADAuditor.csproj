@@ -10,6 +10,7 @@
     <Platforms>AnyCPU</Platforms>
     <Nullable>disable</Nullable>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.4.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

@@ -2,8 +2,8 @@
     Harden-Lab.ps1
     Remediates the findings produced by AD_AUDITOR on the lab domain.
 
-    TARGET: LAB.LOCAL (NetBIOS LAB), domain controller DC01.
-    RUN ON the domain controller, as a Domain Admin, in an elevated PowerShell.
+    TARGET: the lab domain this machine belongs to (tested on LAB.LOCAL, DC01).
+    RUN ON a domain controller, as a Domain Admin, in an elevated PowerShell.
 
     It applies baseline hardening (password policy, machine-account quota,
     AD Recycle Bin, admin protection) and surgically removes the dangerous
@@ -13,7 +13,7 @@
 #>
 
 [CmdletBinding()]
-param([string]$NetBios = "LAB")
+param()
 
 Import-Module ActiveDirectory -ErrorAction Stop
 
@@ -187,9 +187,12 @@ Step "C-ESC1 / C-ESC15: require manager approval on enrollee-supplied-subject te
 }
 
 # ---- ADIDNS ----
+# NOTE: this also stops clients from registering their own new DNS records (secure dynamic
+# update relies on that right); in a real network pre-create records or use DHCP registration.
 Step "E-Adidns: remove 'Authenticated Users : Create child' on AD-integrated zones" {
     $au = New-Object System.Security.Principal.SecurityIdentifier "S-1-5-11"
-    foreach ($part in @("DC=DomainDnsZones,$dn", "CN=MicrosoftDNS,CN=System,$dn")) {
+    $forestDn = (Get-ADRootDSE).rootDomainNamingContext
+    foreach ($part in @("DC=DomainDnsZones,$dn", "DC=ForestDnsZones,$forestDn", "CN=MicrosoftDNS,CN=System,$dn")) {
         Get-ADObject -SearchBase $part -Filter "objectClass -eq 'dnsZone'" -ErrorAction SilentlyContinue | ForEach-Object {
             $p = "AD:\" + $_.DistinguishedName
             $acl = Get-Acl $p
@@ -213,8 +216,9 @@ Write-Host ""
 Write-Host "=== MANUAL / BY-DESIGN (not auto-fixed) ===" -ForegroundColor Cyan
 Note "A-NoLAPS         : deploy Windows LAPS (GPO + schema), then re-run."
 Note "C-ESC5           : review/remove non-default control ACEs on CA and PKI containers manually."
-Note "P-DomainAdmins/EnterpriseAdmins/SchemaAdmins/Administrators = 1 : this is the built-in Administrator - expected baseline, not a defect."
-Note "P-AccountOperators..PrintOperators = 0 : already empty (good)."
+Note "P-DomainAdmins/EnterpriseAdmins/Administrators (INFO) : membership inventory within the expected size - not a defect."
+Note "P-AccountOperators..PrintOperators = 0 (INFO) : already empty (good)."
+Note "P-NotProtectedUsers : add tier-0 admins to Protected Users after testing (not auto-fixed: can lock out service logons)."
 Note "P-AdminCount = 2 / P-EmptyPrivGroups : Administrator+krbtgt and default protected groups - by design."
 Note "SYSVOL GPP cpassword / Restricted Groups / Kerberos ticket lifetimes : remediate via Group Policy."
 

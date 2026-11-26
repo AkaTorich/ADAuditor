@@ -26,7 +26,8 @@ namespace ADAuditor.Core
         UseDesKeyOnly = 0x200000,
         DontRequirePreauth = 0x400000,      // AS-REP roastable
         PasswordExpired = 0x800000,
-        TrustedToAuthForDelegation = 0x1000000 // constrained delegation w/ protocol transition
+        TrustedToAuthForDelegation = 0x1000000, // constrained delegation w/ protocol transition
+        PartialSecretsAccount = 0x4000000       // read-only domain controller computer object
     }
 
     // OID for LDAP_MATCHING_RULE_BIT_AND used in bitwise filters
@@ -52,9 +53,10 @@ namespace ADAuditor.Core
         CrossOrganization = 0x10,
         WithinForest = 0x20,
         TreatAsExternal = 0x40,
-        UsesRc4Encryption = 0x80,
+        UsesRc4Encryption = 0x80,               // meaningful for MIT realm trusts only
         CrossOrgNoTgtDelegation = 0x200,
-        PimTrust = 0x400
+        PimTrust = 0x400,
+        CrossOrgEnableTgtDelegation = 0x800
     }
 
     // pwdProperties bits on the domain object

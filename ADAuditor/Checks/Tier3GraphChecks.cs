@@ -6,9 +6,10 @@ using ADAuditor.Core;
 
 namespace ADAuditor.Checks
 {
-    // Tier 3: build a control graph (MemberOf + dangerous ACLs + DCSync) and find
-    // the shortest escalation path from any non-privileged principal to tier-0
-    // (Domain/Enterprise/Schema/BUILTIN Admins, krbtgt, the domain object).
+    // Tier 3: build a control graph (MemberOf + dangerous ACLs + delegation + DCSync +
+    // RPC sessions/local admins + roasting/ADCS vectors) and find escalation paths from
+    // any non-privileged principal to tier-0 (admin groups, operators, DnsAdmins, DCs,
+    // krbtgt, the domain object).
     public sealed class Tier3GraphChecks : ICheck
     {
         public string Name => "Attack Paths (Tier 3)";
@@ -62,7 +63,8 @@ namespace ADAuditor.Checks
                     string flat = sam.EndsWith("$") ? sam.Substring(0, sam.Length - 1) : sam;
                     if (!string.IsNullOrEmpty(flat)) hostToSid[flat] = sid;
                 }
-                if ((uac & (long)Uac.TrustedForDelegation) != 0 && (uac & (long)Uac.ServerTrustAccount) == 0)
+                if ((uac & (long)Uac.TrustedForDelegation) != 0 && (uac & (long)Uac.ServerTrustAccount) == 0 &&
+                    (uac & (long)Uac.AccountDisabled) == 0)
                     unconstrained.Add(sid);
                 if (r.Properties.Contains("msDS-AllowedToDelegateTo") && r.Properties["msDS-AllowedToDelegateTo"].Count > 0)
                 {
@@ -105,13 +107,16 @@ namespace ADAuditor.Checks
 
                 foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                 {
-                    if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                    if (!CheckUtil.Applies(rule)) continue;
                     string c = rule.IdentityReference.Value;
                     if (defaults.Contains(c) || c == sid) continue;
                     var rights = rule.ActiveDirectoryRights;
                     var ot = rule.ObjectType;
 
-                    if (CheckUtil.FullControl(rights)) edges.Add((c, sid, "GenericAll"));
+                    bool full = CheckUtil.FullControl(rights);
+                    if (full) edges.Add((c, sid, "GenericAll"));
+                    else if ((rights & ActiveDirectoryRights.WriteProperty) != 0 && ot == Guid.Empty)
+                        edges.Add((c, sid, "GenericWrite"));
                     if ((rights & ActiveDirectoryRights.WriteDacl) != 0) edges.Add((c, sid, "WriteDacl"));
                     if ((rights & ActiveDirectoryRights.WriteOwner) != 0) edges.Add((c, sid, "WriteOwner"));
                     if ((rights & ActiveDirectoryRights.ExtendedRight) != 0)
@@ -156,7 +161,7 @@ namespace ADAuditor.Checks
                     var acc = new Dictionary<string, (bool gc, bool ga, bool all)>();
                     foreach (ActiveDirectoryAccessRule rule in dom.ObjectSecurity.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                     {
-                        if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                        if (!CheckUtil.Applies(rule)) continue;
                         string c = rule.IdentityReference.Value;
                         if (defaults.Contains(c)) continue;
                         bool genAll = CheckUtil.FullControl(rule.ActiveDirectoryRights);
@@ -385,6 +390,7 @@ namespace ADAuditor.Checks
                 case "GenericAll": return 100;
                 case "WriteDacl": return 90;
                 case "WriteOwner": return 85;
+                case "GenericWrite": return 82;
                 case "Owns": return 80;
                 case "AllExtendedRights": return 75;
                 case "AddKeyCredentialLink": return 70;

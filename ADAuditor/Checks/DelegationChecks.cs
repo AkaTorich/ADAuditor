@@ -20,7 +20,7 @@ namespace ADAuditor.Checks
                 .Why("Any host trusted for unconstrained delegation caches TGTs of every user who connects, including domain admins - a direct path to full compromise (printer-bug coercion makes it trivial).")
                 .Fix("Replace with constrained/RBCD delegation and mark sensitive accounts as 'Account is sensitive and cannot be delegated'.");
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
-                "(&" + LdapBit.HasFlag("userAccountControl", (long)Uac.TrustedForDelegation) + notDc + ")",
+                "(&" + LdapBit.HasFlag("userAccountControl", (long)Uac.TrustedForDelegation) + notDc + enabled + ")",
                 "sAMAccountName")))
                 CheckUtil.AddDetail(unconstrained, CheckUtil.Sam(r));
             if (unconstrained.Details.Count > 0) yield return unconstrained;
@@ -73,7 +73,7 @@ namespace ADAuditor.Checks
                 .Why("Without pre-auth, anyone can request an AS-REP for the account and crack its password offline.")
                 .Fix("Re-enable pre-authentication on every account.");
             foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(baseDn,
-                "(&(objectCategory=person)(objectClass=user)" + LdapBit.HasFlag("userAccountControl", (long)Uac.DontRequirePreauth) + ")",
+                "(&(objectCategory=person)(objectClass=user)" + LdapBit.HasFlag("userAccountControl", (long)Uac.DontRequirePreauth) + enabled + ")",
                 "sAMAccountName", "objectSid")))
             {
                 CheckUtil.AddDetail(asrep, CheckUtil.Sam(r));

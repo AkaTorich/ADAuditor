@@ -41,7 +41,7 @@ namespace ADAuditor.Checks
                         foreach (ActiveDirectoryAccessRule rule in
                                  dom.ObjectSecurity.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                         {
-                            if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                            if (!CheckUtil.Applies(rule)) continue;
                             if (!exchangeSids.Contains(rule.IdentityReference.Value)) continue;
                             var rights = rule.ActiveDirectoryRights;
                             if ((rights & ActiveDirectoryRights.WriteDacl) != 0 ||
@@ -109,7 +109,8 @@ namespace ADAuditor.Checks
                 "AD-integrated DNS zones allow nonsecure dynamic updates")
                 .Why("Nonsecure dynamic updates let any host (even unauthenticated) overwrite DNS records, enabling spoofing and relay.")
                 .Fix("Set the zone to 'Secure only' dynamic updates.");
-            foreach (var part in new[] { "DC=DomainDnsZones," + baseDn, "CN=MicrosoftDNS,CN=System," + baseDn })
+            foreach (var part in new[] { "DC=DomainDnsZones," + baseDn, "DC=ForestDnsZones," + ctx.RootDomainNamingContext,
+                                         "CN=MicrosoftDNS,CN=System," + baseDn })
             {
                 try
                 {
@@ -126,7 +127,7 @@ namespace ADAuditor.Checks
                                 var blob = pv as byte[];
                                 if (blob == null || blob.Length < 24) continue;
                                 uint id = BitConverter.ToUInt32(blob, 16);
-                                if (id == 0x02 && BitConverter.ToUInt32(blob, 20) == 1)
+                                if (id == 0x02 && blob[20] == 1)   // one-byte value, rest is padding
                                     CheckUtil.AddDetail(dnsUpdate, zone + " (nonsecure updates allowed)");
                             }
 
@@ -135,7 +136,7 @@ namespace ADAuditor.Checks
                         try { sd = CheckUtil.ParseSd(sdb); } catch { continue; }
                         foreach (ActiveDirectoryAccessRule rule in sd.GetAccessRules(true, true, typeof(SecurityIdentifier)))
                         {
-                            if (rule.AccessControlType != System.Security.AccessControl.AccessControlType.Allow) continue;
+                            if (!CheckUtil.Applies(rule)) continue;
                             string sid = rule.IdentityReference.Value;
                             if (sid != "S-1-5-11" && sid != "S-1-1-0") continue; // Authenticated Users / Everyone
                             if ((rule.ActiveDirectoryRights & ActiveDirectoryRights.CreateChild) != 0)
@@ -154,7 +155,6 @@ namespace ADAuditor.Checks
 
             // ---- authentication policy silos (tier-0 isolation) ----
             int siloCount = 0;
-            bool siloOk = true;
             try
             {
                 foreach (var r in CheckUtil.Enumerate(ctx.SubtreeSearcher(
@@ -167,7 +167,7 @@ namespace ADAuditor.Checks
                 // container absent => no silos defined (still worth reporting)
                 ctx.Log?.Invoke("    [!] auth-silo container not found (treated as 0): " + ex.Message);
             }
-            if (siloOk && siloCount == 0)
+            if (siloCount == 0)
                 yield return new Finding("E-NoAuthSilo", Category.Anomalies, Severity.Low, 4,
                     "No Authentication Policy Silos defined")
                     .Why("Silos (with Protected Users) confine tier-0 admin logons to specific hosts and block credential theft/relay reuse.")

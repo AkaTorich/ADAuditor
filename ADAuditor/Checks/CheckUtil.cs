@@ -14,6 +14,7 @@ namespace ADAuditor.Checks
         // Enumerate search results safely (disposes searcher + entry).
         public static IEnumerable<SearchResult> Enumerate(DirectorySearcher searcher)
         {
+            using (searcher.SearchRoot)
             using (searcher)
             using (var results = searcher.FindAll())
             {
@@ -21,6 +22,12 @@ namespace ADAuditor.Checks
                     yield return r;
             }
         }
+
+        // An allow ACE that actually applies to the object it sits on. Inherit-only ACEs
+        // (e.g. an OU delegation scoped to user objects, copied onto a group) do not.
+        public static bool Applies(ActiveDirectoryAccessRule rule)
+            => rule.AccessControlType == AccessControlType.Allow &&
+               (rule.PropagationFlags & PropagationFlags.InheritOnly) == 0;
 
         public static void AddDetail(Finding f, string line)
         {
@@ -68,6 +75,11 @@ namespace ADAuditor.Checks
                 return r.Properties[prop][0] as byte[];
             return null;
         }
+
+        // True if a member DN is the foreign-security-principal object for exactly this SID.
+        public static bool IsFsp(string memberDn, string sid)
+            => !string.IsNullOrEmpty(memberDn) &&
+               memberDn.StartsWith("CN=" + sid + ",", StringComparison.OrdinalIgnoreCase);
 
         // Resolve SID -> readable account name; fall back to the SID string.
         public static string TranslateSid(string sid)
@@ -163,7 +175,9 @@ namespace ADAuditor.Checks
         {
             var list = new List<string>();
             foreach (var r in Enumerate(ctx.SubtreeSearcher(ctx.DefaultNamingContext,
-                "(&(objectCategory=computer)" + LdapBit.HasFlag("userAccountControl", 8192) + ")", "dNSHostName")))
+                "(&(objectCategory=computer)(|" +
+                LdapBit.HasFlag("userAccountControl", (long)Uac.ServerTrustAccount) +
+                LdapBit.HasFlag("userAccountControl", (long)Uac.PartialSecretsAccount) + "))", "dNSHostName")))
             {
                 string h = AuditContext.Str(r, "dNSHostName");
                 if (!string.IsNullOrEmpty(h)) list.Add(h);
